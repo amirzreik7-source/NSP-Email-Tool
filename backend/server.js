@@ -4,9 +4,11 @@ import cors from 'cors';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load keys from env OR from .env file on disk
-import { readFileSync } from 'fs';
 let envKeys = {};
 try {
   const envFile = readFileSync(path.resolve(__dirname, '.env'), 'utf-8');
@@ -30,7 +32,6 @@ async function getClaude() {
   return claude;
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
