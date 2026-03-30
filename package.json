@@ -7,6 +7,6 @@
   },
   "scripts": {
     "build": "cd frontend && npm install && npx vite build && cd ../backend && npm install",
-    "start": "cd backend && node -e \"const fs=require('fs');const keys=['PORT','CLAUDE_API_KEY','BREVO_API_KEY','TITAN_SMTP_HOST','TITAN_SMTP_PORT','TITAN_AMIR_EMAIL','TITAN_AMIR_PASSWORD','TITAN_MARY_EMAIL','TITAN_MARY_PASSWORD'];const lines=keys.filter(k=>process.env[k]).map(k=>k+'='+process.env[k]);fs.writeFileSync('.env',lines.join('\\n'));console.log('Wrote',lines.length,'env vars')\" && node server.js"
+    "start": "cd backend && node -e \"const fs=require('fs');const keys=['CLAUDE_API_KEY','BREVO_API_KEY','TITAN_SMTP_HOST','TITAN_SMTP_PORT','TITAN_AMIR_EMAIL','TITAN_AMIR_PASSWORD','TITAN_MARY_EMAIL','TITAN_MARY_PASSWORD'];const lines=keys.filter(k=>process.env[k]).map(k=>k+'='+process.env[k]);fs.writeFileSync('.env',lines.join('\\n'));console.log('Wrote',lines.length,'env vars, PORT='+process.env.PORT)\" && node server.js"
   }
 }
