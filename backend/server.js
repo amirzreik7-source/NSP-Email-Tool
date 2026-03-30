@@ -23,17 +23,14 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // Serve frontend build files
-app.use(express.static(path.join(__dirname, '..', 'frontend', 'dist')));
+const distPath = path.resolve(__dirname, '..', 'frontend', 'dist');
+app.use(express.static(distPath));
 
 // Claude initialized lazily via getClaude()
 
 // ── Health check ──
-app.get('/api/health', async (req, res) => {
-  const { readdirSync } = await import('fs');
-  const distPath = path.join(__dirname, '..', 'frontend', 'dist');
-  let files = [];
-  try { files = readdirSync(distPath); } catch(e) { files = ['ERROR: ' + e.message]; }
-  res.json({ status: 'ok', distPath, files, cwd: process.cwd(), dirname: __dirname });
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok' });
 });
 
 // ── AI: Analyze list ──
@@ -242,7 +239,7 @@ function personalizeTemplate(template, contact) {
 
 // Catch-all: serve React app for any non-API route
 app.get('{*path}', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
+  res.sendFile(path.resolve(__dirname, '..', 'frontend', 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
