@@ -1,0 +1,12 @@
+{
+  "name": "nsp-email-tool",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "cd frontend && npm install && npx vite build && cd ../backend && npm install",
+    "start": "cd backend && node server.js"
+  }
+}
