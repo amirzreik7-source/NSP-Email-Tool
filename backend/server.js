@@ -62,7 +62,7 @@ app.use(express.static(distPath));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    phase: 3,
+    phase: 4,
     hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
     claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
     hasBrevoKey: !!getKey('BREVO_API_KEY'),
@@ -571,7 +571,200 @@ app.post('/api/export/customer-match', (req, res) => {
 });
 
 // ══════════════════════════════════════════
-// PHASE 1: SENDING (unchanged)
+// PHASE 4: COMPETITIVE MOAT
+// ══════════════════════════════════════════
+
+// ── Win/Loss Logging ──
+app.post('/api/win-loss/log', (req, res) => {
+  // Frontend stores directly in Firestore — this endpoint for external integrations
+  res.json({ ok: true, message: 'Use Firestore directly from frontend' });
+});
+
+// ── Competitive Map (aggregated from win/loss data) ──
+app.post('/api/competitive/analyze', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API not configured' });
+    const { wins, losses } = req.body;
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2048,
+      system: 'You analyze competitive data for a house painting company. Return actionable insights as JSON.',
+      messages: [{ role: 'user', content: `Analyze ${wins.length} wins and ${losses.length} losses:\n\nWins: ${JSON.stringify(wins.slice(0, 30))}\n\nLosses: ${JSON.stringify(losses.slice(0, 30))}\n\nReturn JSON:\n{\n  "winRateByCity": {"city": rate},\n  "winRateByCompetitor": {"competitor": rate},\n  "topLossReasons": ["reason1"],\n  "topWinReasons": ["reason1"],\n  "insights": ["insight1"],\n  "campaignRecommendations": [{"city":"...","angle":"...","reason":"..."}]\n}\nONLY JSON.` }],
+    });
+    const text = msg.content[0].text;
+    res.json(JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim()));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Weather Check ──
+app.post('/api/weather/check-cities', async (req, res) => {
+  const { cities } = req.body;
+  // NoVA city coordinates
+  const coords = {
+    'Vienna': { lat: 38.9012, lng: -77.2653 }, 'Arlington': { lat: 38.8816, lng: -77.0910 },
+    'McLean': { lat: 38.9339, lng: -77.1773 }, 'Falls Church': { lat: 38.8829, lng: -77.1711 },
+    'Ashburn': { lat: 39.0437, lng: -77.4875 }, 'Reston': { lat: 38.9587, lng: -77.3570 },
+    'Herndon': { lat: 38.9696, lng: -77.3861 }, 'Fairfax': { lat: 38.8462, lng: -77.3064 },
+    'Alexandria': { lat: 38.8048, lng: -77.0469 }, 'Manassas': { lat: 38.7509, lng: -77.4753 },
+    'Springfield': { lat: 38.7893, lng: -77.1872 }, 'Oakton': { lat: 38.8810, lng: -77.3014 },
+    'Great Falls': { lat: 38.9985, lng: -77.2883 }, 'Chantilly': { lat: 38.8943, lng: -77.4311 },
+    'Leesburg': { lat: 39.1157, lng: -77.5636 }, 'Sterling': { lat: 39.0062, lng: -77.4286 },
+  };
+
+  const results = [];
+  const citiesToCheck = cities || Object.keys(coords);
+
+  for (const city of citiesToCheck) {
+    const c = coords[city];
+    if (!c) continue;
+    try {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&temperature_unit=fahrenheit&timezone=America/New_York&forecast_days=7`;
+      const r = await fetch(url);
+      const data = await r.json();
+      const daily = data.daily;
+      if (!daily) continue;
+
+      // Check painting conditions
+      let consecutivePerfect = 0;
+      let maxConsecutive = 0;
+      const details = [];
+      for (let i = 0; i < daily.time.length; i++) {
+        const tempOk = daily.temperature_2m_max[i] >= 50 && daily.temperature_2m_max[i] <= 90;
+        const dryOk = daily.precipitation_sum[i] === 0;
+        const windOk = daily.wind_speed_10m_max[i] < 20;
+        const perfect = tempOk && dryOk && windOk;
+        if (perfect) { consecutivePerfect++; maxConsecutive = Math.max(maxConsecutive, consecutivePerfect); }
+        else consecutivePerfect = 0;
+        details.push({ date: daily.time[i], high: daily.temperature_2m_max[i], low: daily.temperature_2m_min[i], rain: daily.precipitation_sum[i], wind: daily.wind_speed_10m_max[i], perfect });
+      }
+
+      results.push({
+        city,
+        perfectDays: maxConsecutive,
+        isPaintingWeather: maxConsecutive >= 5,
+        tempRange: `${Math.round(Math.min(...daily.temperature_2m_min))}–${Math.round(Math.max(...daily.temperature_2m_max))}°F`,
+        details,
+      });
+    } catch(e) { results.push({ city, error: e.message }); }
+  }
+
+  res.json({ alerts: results.filter(r => r.isPaintingWeather), allCities: results });
+});
+
+// ── Neighborhood Proximity Search ──
+app.post('/api/neighborhood/find-nearby', async (req, res) => {
+  const { jobAddress, contacts, radiusMiles } = req.body;
+  const radius = radiusMiles || 0.5;
+
+  // Simple geocoding using Open-Meteo's geocoding (free, no key)
+  try {
+    const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(jobAddress)}&count=1&language=en&format=json`);
+    const geoData = await geoRes.json();
+    if (!geoData.results?.length) return res.json({ nearby: [], error: 'Could not geocode job address' });
+
+    const jobLat = geoData.results[0].latitude;
+    const jobLng = geoData.results[0].longitude;
+
+    // Calculate distance for each contact (Haversine formula)
+    const nearby = [];
+    for (const contact of contacts) {
+      const addr = `${contact.address?.street || ''} ${contact.address?.city || ''} ${contact.address?.state || ''}`.trim();
+      if (!addr || addr.length < 5) continue;
+
+      try {
+        const cRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(addr)}&count=1&language=en&format=json`);
+        const cData = await cRes.json();
+        if (!cData.results?.length) continue;
+
+        const cLat = cData.results[0].latitude;
+        const cLng = cData.results[0].longitude;
+        const dist = haversine(jobLat, jobLng, cLat, cLng);
+
+        if (dist <= radius) {
+          nearby.push({ ...contact, distance: Math.round(dist * 100) / 100 });
+        }
+      } catch(e) { /* skip contacts that can't be geocoded */ }
+    }
+
+    nearby.sort((a, b) => a.distance - b.distance);
+    res.json({ nearby, jobLat, jobLng, radius });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 3959; // miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── Photo Analysis (Claude Vision) ──
+app.post('/api/photos/analyze', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API not configured' });
+    const { imageUrl } = req.body;
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'url', url: imageUrl } },
+        { type: 'text', text: `Analyze this house photo for a painting estimate. Return JSON:\n{\n  "condition": "Description of paint condition",\n  "issues": ["issue1", "issue2"],\n  "scopeEstimate": "Estimated scope description",\n  "estimatedDays": "3-4 days",\n  "talkingPoints": ["point1", "point2"],\n  "surfaces": ["siding", "trim", "shutters"]\n}\nONLY JSON.` }
+      ]}],
+    });
+    const text = msg.content[0].text;
+    res.json(JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim()));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Voice Profile ──
+app.post('/api/voice/analyze', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API not configured' });
+    const { edits } = req.body;
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: 'Analyze edit patterns between AI-generated messages and human-edited final versions. Extract the human\'s writing preferences.',
+      messages: [{ role: 'user', content: `Analyze these ${edits.length} edit pairs (AI original → human edited):\n\n${JSON.stringify(edits.slice(-30))}\n\nReturn JSON:\n{\n  "preferredGreetings": ["Hey", "Hi"],\n  "wordsToAvoid": ["valued", "esteemed"],\n  "wordsPreferred": ["swing by", "take a look"],\n  "toneDescriptors": ["casual", "direct"],\n  "avgSentenceLength": "short",\n  "signOffStyle": "informal",\n  "exampleMessages": ["Best 3 approved messages verbatim"],\n  "summary": "One paragraph describing this person's writing voice"\n}\nONLY JSON.` }],
+    });
+    const text = msg.content[0].text;
+    res.json(JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim()));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Auto Audience Segments ──
+app.post('/api/audience/generate-segments', (req, res) => {
+  const { contacts } = req.body;
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+  const ninetyDaysAgo = new Date(now - 90 * 24 * 60 * 60 * 1000);
+
+  const segments = {
+    'All Contacts': contacts,
+    'Recent Openers (30 days)': contacts.filter(c => c.engagement?.lastOpenDate && new Date(c.engagement.lastOpenDate) > thirtyDaysAgo),
+    'High Intent (clicked 30 days)': contacts.filter(c => c.engagement?.lastClickDate && new Date(c.engagement.lastClickDate) > thirtyDaysAgo),
+    'Cold Contacts (90+ days)': contacts.filter(c => !c.engagement?.lastOpenDate || new Date(c.engagement.lastOpenDate) < ninetyDaysAgo),
+    'Won Customers': contacts.filter(c => c.currentStage === 'won' || c.currentStage === 'completed'),
+  };
+
+  const result = Object.entries(segments).map(([name, list]) => ({
+    name,
+    count: list.length,
+    contacts: list.map(c => ({ email: c.email, phone: c.phone, firstName: c.firstName, lastName: c.lastName, address: c.address })),
+  }));
+
+  res.json(result);
+});
+
+// ══════════════════════════════════════════
+// PHASE 1: SENDING
 // ══════════════════════════════════════════
 
 // ── Send via Brevo ──

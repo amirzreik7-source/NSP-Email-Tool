@@ -15,6 +15,12 @@ import FollowUps from './pages/FollowUps';
 import ApprovalQueue from './pages/ApprovalQueue';
 import AICampaign from './pages/AICampaign';
 import AdExport from './pages/AdExport';
+import Pipeline from './pages/Pipeline';
+import WeatherTriggers from './pages/WeatherTriggers';
+import Neighborhood from './pages/Neighborhood';
+import Referrals from './pages/Referrals';
+import VoiceLearning from './pages/VoiceLearning';
+import Intelligence from './pages/Intelligence';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -34,6 +40,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/hot-leads" element={<HotLeads />} />
+          <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/approval-queue" element={<ApprovalQueue />} />
           <Route path="/lists" element={<Lists />} />
           <Route path="/lists/:listId" element={<ListDetail />} />
@@ -42,6 +49,11 @@ export default function App() {
           <Route path="/ai-campaign" element={<AICampaign />} />
           <Route path="/conversations" element={<Conversations />} />
           <Route path="/follow-ups" element={<FollowUps />} />
+          <Route path="/neighborhood" element={<Neighborhood />} />
+          <Route path="/weather" element={<WeatherTriggers />} />
+          <Route path="/intelligence" element={<Intelligence />} />
+          <Route path="/referrals" element={<Referrals />} />
+          <Route path="/voice" element={<VoiceLearning />} />
           <Route path="/ad-export" element={<AdExport />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
