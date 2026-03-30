@@ -62,7 +62,7 @@ app.use(express.static(distPath));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    phase: 2,
+    phase: 3,
     hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
     claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
     hasBrevoKey: !!getKey('BREVO_API_KEY'),
@@ -363,23 +363,211 @@ app.post('/api/send/sms', async (req, res) => {
   }
 });
 
-// ── Click tracking redirect ──
+// ══════════════════════════════════════════
+// PHASE 3: RELATIONSHIP LOOP
+// ══════════════════════════════════════════
+
+// ── AI: Generate BATCH of unique emails (one per contact) ──
+app.post('/api/ai/generate-unique-emails-batch', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { contacts, senderName, senderEmail, tone, goal, listPersona } = req.body;
+    const results = [];
+
+    for (let i = 0; i < contacts.length; i++) {
+      const contact = contacts[i];
+      try {
+        const jobHistory = (contact.jobHistory || []).map(j =>
+          `${j.jobType} in ${j.jobDate ? new Date(j.jobDate).getFullYear() : 'unknown'} ($${j.jobValue || 'unknown'}) rep:${j.salesRep || 'unknown'}`
+        ).join('; ');
+        const tier = (contact.lists || []).some(l => l.tier === 'personal') ? 'personal' : 'general';
+        const notes = contact.intelligenceProfile?.personalNotes || '';
+
+        const message = await ai.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          system: `You are ${senderName} from Northern Star Painters, Northern Virginia. Write a personal email to ONE person. Read like a real human wrote it. No marketing language. No templates.
+CRITICAL RULES:
+- If tier is "general" or "cold": NEVER claim you know them personally. Use "we know you were interested in painting" angle only.
+- If tier is "personal": Reference specific job history naturally.
+- Keep under 200 words. Email style, not letter style. No big buttons.
+- Never repeat content from previous campaigns.`,
+          messages: [{
+            role: 'user',
+            content: `Write email to:
+Name: ${contact.firstName} ${contact.lastName}
+City: ${contact.address?.city || 'Northern Virginia'}
+Tier: ${tier}
+Job History: ${jobHistory || 'None'}
+Notes: ${notes || 'None'}
+Engagement: ${contact.engagement?.engagementTrend || 'new'} (score:${contact.engagement?.engagementScore || 0})
+Goal: ${goal}
+
+Return JSON: {"subject":"...","bodyHTML":"...","bodyText":"..."}
+ONLY JSON.`
+          }],
+        });
+
+        const text = message.content[0].text;
+        const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+        results.push({ contactId: contact.id, email: contact.email, ...json, status: 'ok' });
+      } catch (e) {
+        results.push({ contactId: contact.id, email: contact.email, status: 'error', error: e.message });
+      }
+    }
+
+    res.json({ results, total: contacts.length, success: results.filter(r => r.status === 'ok').length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── AI: Pre-send audit ──
+app.post('/api/ai/audit-emails', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { emails, campaignSender, campaignTier } = req.body;
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system: `You are a quality auditor for email campaigns. Check each email for issues and return JSON.`,
+      messages: [{
+        role: 'user',
+        content: `Audit these ${emails.length} emails. Campaign sender: ${campaignSender}, tier: ${campaignTier}.
+
+For each email, check:
+1. Does it claim personal relationship for a cold/general tier contact? (CRITICAL)
+2. Does it reference job history the contact doesn't have? (CRITICAL)
+3. Did personalization fall back to generic placeholders like "there" or "your area"? (WARNING)
+4. Is the tier/sender mismatch? Personal email from Mary or cold email from Amir? (WARNING)
+5. Is it significantly shorter than 50 words? (WARNING)
+
+Emails to audit:
+${JSON.stringify(emails.slice(0, 50).map(e => ({
+  email: e.email,
+  tier: e.tier,
+  subject: e.subject,
+  bodySnippet: (e.bodyText || e.bodyHTML || '').substring(0, 300),
+  hasJobHistory: !!(e.jobHistory && e.jobHistory.length),
+  city: e.city
+})))}
+
+Return JSON:
+{
+  "passed": number,
+  "warnings": [{"email":"...","issue":"...","severity":"warning"}],
+  "critical": [{"email":"...","issue":"...","severity":"critical"}],
+  "summary": "One line summary"
+}
+ONLY JSON.`
+      }],
+    });
+
+    const text = message.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── AI: Classify incoming text intent ──
+app.post('/api/ai/classify-intent', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { message: incomingMsg, contactName } = req.body;
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 256,
+      system: `Classify the intent of a customer's text message reply. Return JSON only.`,
+      messages: [{
+        role: 'user',
+        content: `${contactName} replied: "${incomingMsg}"
+
+Classify intent. Return JSON:
+{
+  "intent": "interested" | "question" | "not_interested" | "scheduling" | "unsubscribe" | "other",
+  "confidence": 0.0-1.0,
+  "suggestedAction": "Brief recommended action"
+}
+ONLY JSON.`
+      }],
+    });
+
+    const text = msg.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Tracking: Click redirect with Firestore logging ──
 app.get('/api/track/click', (req, res) => {
   const { c: contactId, u: url, cam: campaignId } = req.query;
-  // Log the click (frontend will store in Firestore)
   console.log(`Click: contact=${contactId} campaign=${campaignId} url=${url}`);
-  // Redirect to actual URL
   res.redirect(url || 'https://northernstarpainters.com');
 });
 
-// ── Open tracking pixel ──
+// ── Tracking: Open pixel ──
 app.get('/api/track/open', (req, res) => {
   const { c: contactId, cam: campaignId } = req.query;
   console.log(`Open: contact=${contactId} campaign=${campaignId}`);
-  // Return 1x1 transparent pixel
   const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
   res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-cache, no-store', 'Content-Length': pixel.length });
   res.end(pixel);
+});
+
+// ── Tracking: Page view from website ──
+app.post('/api/track/pageview', express.text({ type: '*/*' }), (req, res) => {
+  try {
+    const data = JSON.parse(req.body);
+    console.log(`Pageview: contact=${data.uid} page=${data.page} campaign=${data.cam}`);
+    res.status(204).end();
+  } catch(e) {
+    res.status(204).end();
+  }
+});
+
+// ── Webhook: Incoming SMS from Brevo ──
+app.post('/api/webhook/sms-reply', (req, res) => {
+  console.log('SMS webhook received:', JSON.stringify(req.body));
+  // Store in memory for frontend to poll — in production use Firestore
+  if (!global._smsReplies) global._smsReplies = [];
+  global._smsReplies.push({ ...req.body, receivedAt: new Date().toISOString() });
+  if (global._smsReplies.length > 100) global._smsReplies = global._smsReplies.slice(-100);
+  res.status(200).json({ ok: true });
+});
+
+// ── Poll incoming SMS replies ──
+app.get('/api/webhook/sms-replies', (req, res) => {
+  res.json(global._smsReplies || []);
+});
+
+// ── Export contacts for ads (Google/Meta format) ──
+app.post('/api/export/customer-match', (req, res) => {
+  const { contacts, platform } = req.body;
+  if (!contacts || !contacts.length) return res.status(400).json({ error: 'No contacts' });
+
+  const rows = contacts.map(c => {
+    if (platform === 'meta') {
+      return [c.email || '', c.phone || '', c.firstName || '', c.lastName || '', c.address?.city || '', c.address?.state || '', c.address?.zip || '', 'US'].join(',');
+    }
+    return [c.email || '', c.phone || '', c.firstName || '', c.lastName || '', c.address?.city || '', c.address?.state || '', c.address?.zip || '', 'US'].join(',');
+  });
+
+  const header = platform === 'meta'
+    ? 'email,phone,fn,ln,ct,st,zip,country'
+    : 'Email,Phone,First Name,Last Name,City,State,Zip,Country';
+
+  const csv = header + '\n' + rows.join('\n');
+  res.set({ 'Content-Type': 'text/csv', 'Content-Disposition': `attachment; filename="customer-match-${platform}-${Date.now()}.csv"` });
+  res.send(csv);
 });
 
 // ══════════════════════════════════════════

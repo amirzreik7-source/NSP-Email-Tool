@@ -177,3 +177,63 @@ function calculateTrend(eng) {
   if (daysSinceOpen < 90) return 'cooling';
   return 'dormant';
 }
+
+// ── Cross-List Reclassification Engine ──
+
+export async function reclassifyContacts(userId, newListId) {
+  const allContacts = await getAllContacts(userId);
+  const report = { newContacts: 0, updated: 0, reclassified: [], merged: 0, conflicts: [] };
+
+  // Get contacts that belong to the new list
+  const newListContacts = allContacts.filter(c => c.lists?.some(l => l.listId === newListId));
+
+  for (const contact of newListContacts) {
+    // Determine highest tier from all lists
+    const tiers = (contact.lists || []).map(l => l.tier);
+    const oldTier = contact.currentTier || 'general';
+    let newTier = 'general';
+    if (tiers.includes('personal')) newTier = 'personal';
+    else if (tiers.includes('realtime')) newTier = 'realtime';
+
+    // Determine recommended sender
+    const sender = newTier === 'personal' ? 'amirz@northernstarpainters.com' : 'mary@northernstarpainters.com';
+    const senderName = newTier === 'personal' ? 'Amir Zreik' : 'Mary Johnson';
+
+    // Check if tier changed
+    if (newTier !== oldTier) {
+      report.reclassified.push({
+        name: `${contact.firstName} ${contact.lastName}`,
+        email: contact.email,
+        from: oldTier,
+        to: newTier,
+        reason: `Appeared in ${(contact.lists || []).length} lists, highest tier: ${newTier}`,
+      });
+
+      await updateDoc(doc(db, CONTACTS_COL, contact.id), {
+        currentTier: newTier,
+        'engagement.recommendedSender': sender,
+        'engagement.recommendedSenderName': senderName,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // Count multi-list contacts as merged
+    if ((contact.lists || []).length > 1) report.merged++;
+  }
+
+  return report;
+}
+
+// ── Get contact's full campaign history ──
+export async function getContactCampaignHistory(userId, contactEmail) {
+  // Query campaigns where this contact was in the audience
+  const campSnap = await getDocs(query(collection(db, 'emailCampaigns'), where('userId', '==', userId)));
+  const campaigns = campSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return campaigns.filter(c => c.status === 'sent').map(c => ({
+    id: c.id,
+    name: c.name,
+    sentAt: c.sentAt,
+    subject: c.subject,
+    fromName: c.fromName,
+  }));
+}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { auth } from '../lib/firebase';
-import { getAllLists, createList, upsertContact } from '../lib/contacts';
+import { getAllLists, createList, upsertContact, reclassifyContacts } from '../lib/contacts';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 
@@ -126,6 +126,11 @@ function CSVUpload({ onDone }) {
       if (r.status === 'created') created++; else if (r.status === 'updated') updated++; else skipped++;
       if ((i + 1) % 10 === 0 || i === csvData.length - 1) setProgress({ total: csvData.length, processed: i + 1, created, updated, skipped });
     }
+    // Run cross-list reclassification
+    try {
+      const reclassReport = await reclassifyContacts(userId, listId);
+      setProgress(prev => ({ ...prev, reclassified: reclassReport.reclassified?.length || 0, merged: reclassReport.merged || 0 }));
+    } catch(e) { console.error('Reclassification error:', e); }
     setStep(5);
   };
 
@@ -208,6 +213,14 @@ function CSVUpload({ onDone }) {
         <div className="flex justify-between"><span className="text-green-600">New:</span><span className="text-green-600">{progress.created}</span></div>
         <div className="flex justify-between"><span className="text-blue-600">Updated:</span><span className="text-blue-600">{progress.updated}</span></div>
         <div className="flex justify-between"><span className="text-gray-400">Skipped:</span><span className="text-gray-400">{progress.skipped}</span></div>
+        {(progress.reclassified > 0 || progress.merged > 0) && (
+          <>
+            <hr className="my-2" />
+            <p className="text-xs font-medium text-gray-700">Cross-List Intelligence:</p>
+            {progress.reclassified > 0 && <div className="flex justify-between"><span className="text-purple-600">Tier upgraded:</span><span className="text-purple-600">{progress.reclassified}</span></div>}
+            {progress.merged > 0 && <div className="flex justify-between"><span className="text-indigo-600">Multi-list merged:</span><span className="text-indigo-600">{progress.merged}</span></div>}
+          </>
+        )}
       </div>
       <button onClick={onDone} className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium">Done →</button>
     </div>

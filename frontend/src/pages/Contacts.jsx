@@ -142,6 +142,47 @@ function ContactDetail({ contact, onBack }) {
             <p className="text-sm">{c.intelligenceProfile.personalNotes}</p>
           </div>
         )}
+
+        {/* Engagement Dashboard */}
+        <div className="mt-4 bg-white border border-gray-200 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Engagement Dashboard</h3>
+          <div className="grid grid-cols-4 gap-3 text-center">
+            <div className="bg-blue-50 rounded-lg p-2"><p className="text-lg font-bold text-blue-700">{c.engagement?.campaignsReceived || 0}</p><p className="text-xs text-blue-500">Received</p></div>
+            <div className="bg-green-50 rounded-lg p-2"><p className="text-lg font-bold text-green-700">{c.engagement?.totalOpens || 0}</p><p className="text-xs text-green-500">Opens</p></div>
+            <div className="bg-purple-50 rounded-lg p-2"><p className="text-lg font-bold text-purple-700">{c.engagement?.totalClicks || 0}</p><p className="text-xs text-purple-500">Clicks</p></div>
+            <div className="bg-orange-50 rounded-lg p-2"><p className="text-lg font-bold text-orange-700">{c.engagement?.engagementScore || 0}</p><p className="text-xs text-orange-500">Score</p></div>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs text-gray-500">Trend:</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+              c.engagement?.engagementTrend === 'rising' ? 'bg-green-100 text-green-700' :
+              c.engagement?.engagementTrend === 'stable' ? 'bg-blue-100 text-blue-700' :
+              c.engagement?.engagementTrend === 'cooling' ? 'bg-yellow-100 text-yellow-700' :
+              'bg-gray-100 text-gray-500'
+            }`}>{c.engagement?.engagementTrend || 'new'}</span>
+            {c.engagement?.recommendedSender && <span className="text-xs text-gray-400">· Recommended: {c.engagement.recommendedSenderName || c.engagement.recommendedSender}</span>}
+          </div>
+
+          {/* Recommended Next Action */}
+          <div className="mt-3 bg-gray-50 rounded-lg p-2">
+            <p className="text-xs text-gray-500 mb-1">Recommended Action:</p>
+            <p className="text-sm text-gray-700">{
+              (c.engagement?.engagementTrend === 'dormant') ? '💤 Dormant 90+ days — consider re-engagement campaign or remove from active list' :
+              (c.engagement?.totalClicks > 0 && (c.engagement?.totalOpens || 0) > 2) ? '🎯 Clicking but not converting — prioritize for personal outreach' :
+              (c.engagement?.totalOpens > 2 && !c.engagement?.totalClicks) ? '📖 Opening but not clicking — try different angle or CTA' :
+              (c.engagement?.engagementTrend === 'rising') ? '📈 Engagement rising — great time to reach out' :
+              '📬 Send first campaign to start building engagement data'
+            }</p>
+          </div>
+
+          {c.engagement?.lastOpenDate && <p className="text-xs text-gray-400 mt-2">Last engagement: {new Date(c.engagement.lastOpenDate).toLocaleDateString()}</p>}
+        </div>
+
+        {/* Tier & Sender */}
+        <div className="mt-4 bg-indigo-50 rounded-lg p-3">
+          <p className="text-xs text-gray-500 mb-1">Relationship Tier</p>
+          <p className="text-sm font-medium">{c.currentTier || 'general'} · Sender: {c.engagement?.recommendedSenderName || 'Not assigned'}</p>
+        </div>
       </div>
     </div>
   );
