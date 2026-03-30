@@ -1,10 +1,19 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import Anthropic from '@anthropic-ai/sdk';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// Lazy-load Anthropic only when needed (avoids crash if key missing)
+let claude = null;
+async function getClaude() {
+  if (!claude && process.env.CLAUDE_API_KEY) {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+  }
+  return claude;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -16,7 +25,7 @@ app.use(express.json({ limit: '10mb' }));
 // Serve frontend build files
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'dist')));
 
-const claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+// Claude initialized lazily via getClaude()
 
 // ── Health check ──
 app.get('/api/health', (req, res) => {
@@ -26,9 +35,11 @@ app.get('/api/health', (req, res) => {
 // ── AI: Analyze list ──
 app.post('/api/ai/analyze-list', async (req, res) => {
   try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
     const { userContext, csvSample, totalCount, columns } = req.body;
 
-    const message = await claude.messages.create({
+    const message = await ai.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2048,
       system: `You are a marketing analyst for Northern Star Painters, a house painting company in Northern Virginia. Analyze contact lists and return ONLY valid JSON.`,
@@ -74,9 +85,11 @@ ONLY return JSON. No other text.`
 // ── AI: Generate email ──
 app.post('/api/ai/generate-email', async (req, res) => {
   try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
     const { goal, persona, senderName, tone, personalizationFields } = req.body;
 
-    const message = await claude.messages.create({
+    const message = await ai.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2048,
       system: `You write emails for Northern Star Painters, a house painting company in Northern Virginia. Write emails that feel personal, not like marketing templates. Available personalization fields: ${personalizationFields.join(', ')}`,
