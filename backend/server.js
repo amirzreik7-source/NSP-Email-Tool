@@ -450,28 +450,37 @@ app.post('/api/send/batch', async (req, res) => {
   const { method, fromEmail, fromName, subject, htmlTemplate, textTemplate, contacts } = req.body;
   const results = { sent: 0, failed: 0, errors: [] };
 
+  const footer = `<br><br><p style="font-size:11px;color:#999;text-align:center;">Northern Star Painters | 4600 South Four Mile Run Drive, Arlington, VA 22204<br><a href="#" style="color:#999;">Unsubscribe</a></p>`;
+
   const batchSize = 50;
   for (let i = 0; i < contacts.length; i += batchSize) {
     const batch = contacts.slice(i, i + batchSize);
 
     for (const contact of batch) {
       try {
-        const personalizedHtml = personalizeTemplate(htmlTemplate, contact);
-        const personalizedText = personalizeTemplate(textTemplate, contact);
-        const personalizedSubject = personalizeTemplate(subject, contact);
+        const html = personalizeTemplate(htmlTemplate, contact) + footer;
+        const text = personalizeTemplate(textTemplate, contact);
+        const subj = personalizeTemplate(subject, contact);
 
-        const endpoint = method === 'titan' ? '/api/send/titan' : '/api/send/brevo';
-        const sendRes = await fetch(`http://localhost:${PORT}${endpoint}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fromEmail, fromName, toEmail: contact.email, toName: contact.firstName || '',
-            subject: personalizedSubject, htmlContent: personalizedHtml, textContent: personalizedText,
-          }),
-        });
+        if (method === 'titan') {
+          const isAmir = fromEmail.toLowerCase().includes('amirz');
+          const transporter = nodemailer.createTransport({
+            host: getKey('TITAN_SMTP_HOST') || 'smtp.titan.email',
+            port: parseInt(getKey('TITAN_SMTP_PORT') || '465'),
+            secure: true,
+            auth: { user: isAmir ? getKey('TITAN_AMIR_EMAIL') : getKey('TITAN_MARY_EMAIL'), pass: isAmir ? getKey('TITAN_AMIR_PASSWORD') : getKey('TITAN_MARY_PASSWORD') },
+          });
+          await transporter.sendMail({ from: `"${fromName}" <${fromEmail}>`, to: contact.email, subject: subj, html, text });
+        } else {
+          const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
+            body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: contact.email, name: contact.firstName || '' }], subject: subj, htmlContent: html, textContent: text }),
+          });
+          if (!brevoRes.ok) throw new Error('Brevo failed');
+        }
 
-        if (sendRes.ok) results.sent++;
-        else { results.failed++; results.errors.push({ email: contact.email, error: 'Send failed' }); }
+        results.sent++;
       } catch (e) {
         results.failed++;
         results.errors.push({ email: contact.email, error: e.message });
