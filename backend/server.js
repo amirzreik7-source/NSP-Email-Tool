@@ -1,25 +1,41 @@
-import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Load keys from env OR from .env file on disk
-let envKeys = {};
+// Try loading .env file manually (dotenv removed — Railway has issues with it)
 try {
-  const envFile = readFileSync(path.resolve(__dirname, '.env'), 'utf-8');
-  envFile.split('\n').forEach(line => {
-    const [k, ...v] = line.split('=');
-    if (k && v.length) envKeys[k.trim()] = v.join('=').trim();
-  });
-} catch(e) {}
+  const envPath = path.resolve(__dirname, '.env');
+  if (existsSync(envPath)) {
+    console.log('.env file found at', envPath);
+    readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+      const eq = line.indexOf('=');
+      if (eq > 0) {
+        const key = line.substring(0, eq).trim();
+        const val = line.substring(eq + 1).trim();
+        if (key && val && !process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    });
+  } else {
+    console.log('No .env file at', envPath);
+  }
+} catch(e) { console.log('.env load error:', e.message); }
+
+// Log which keys are available
+console.log('ENV CHECK:', {
+  PORT: process.env.PORT || 'NOT SET',
+  CLAUDE: process.env.CLAUDE_API_KEY ? 'SET (' + process.env.CLAUDE_API_KEY.substring(0,10) + '...)' : 'NOT SET',
+  BREVO: process.env.BREVO_API_KEY ? 'SET' : 'NOT SET',
+});
 
 function getKey(name) {
-  return process.env[name] || envKeys[name] || '';
+  return process.env[name] || '';
 }
 
 let claude = null;
