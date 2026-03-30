@@ -237,7 +237,7 @@ function personalizeTemplate(template, contact) {
 }
 
 // Catch-all: serve React app for any non-API route
-app.get('*', (req, res) => {
+app.get('{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
 });
 
