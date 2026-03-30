@@ -28,7 +28,14 @@ app.use(express.static(distPath));
 
 // ── Health check ──
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', phase: 2 });
+  res.json({
+    status: 'ok',
+    phase: 2,
+    hasClaudeKey: !!process.env.CLAUDE_API_KEY,
+    claudeKeyPrefix: process.env.CLAUDE_API_KEY ? process.env.CLAUDE_API_KEY.substring(0, 10) + '...' : 'MISSING',
+    hasBrevoKey: !!process.env.BREVO_API_KEY,
+    envCount: Object.keys(process.env).filter(k => k.startsWith('CLAUDE') || k.startsWith('BREVO') || k.startsWith('TITAN')).length,
+  });
 });
 
 // ══════════════════════════════════════════
