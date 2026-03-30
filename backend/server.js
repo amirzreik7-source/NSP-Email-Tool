@@ -462,7 +462,7 @@ app.post('/api/send/batch', async (req, res) => {
         const text = personalizeTemplate(textTemplate, contact);
         const subj = personalizeTemplate(subject, contact);
 
-        if (method === 'titan') {
+        if (method === 'titan_disabled_use_brevo') { // Titan SMTP blocked from Railway — using Brevo for all sends
           const isAmir = fromEmail.toLowerCase().includes('amirz');
           const transporter = nodemailer.createTransport({
             host: getKey('TITAN_SMTP_HOST') || 'smtp.titan.email',
