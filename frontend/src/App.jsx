@@ -9,6 +9,9 @@ import Contacts from './pages/Contacts';
 import Campaigns from './pages/Campaigns';
 import Settings from './pages/Settings';
 import ListDetail from './pages/ListDetail';
+import HotLeads from './pages/HotLeads';
+import Conversations from './pages/Conversations';
+import FollowUps from './pages/FollowUps';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -42,10 +45,13 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/hot-leads" element={<HotLeads />} />
           <Route path="/lists" element={<Lists />} />
           <Route path="/lists/:listId" element={<ListDetail />} />
           <Route path="/contacts" element={<Contacts />} />
           <Route path="/campaigns" element={<Campaigns />} />
+          <Route path="/conversations" element={<Conversations />} />
+          <Route path="/follow-ups" element={<FollowUps />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" />} />

@@ -3,9 +3,12 @@ import { auth, signOut } from '../lib/firebase';
 
 const navItems = [
   { to: '/', icon: '📊', label: 'Dashboard' },
+  { to: '/hot-leads', icon: '🔥', label: 'Hot Leads' },
   { to: '/lists', icon: '📋', label: 'Lists' },
   { to: '/contacts', icon: '👥', label: 'Contacts' },
   { to: '/campaigns', icon: '📧', label: 'Campaigns' },
+  { to: '/conversations', icon: '💬', label: 'Conversations' },
+  { to: '/follow-ups', icon: '📋', label: 'Follow-Ups' },
   { to: '/settings', icon: '⚙️', label: 'Settings' },
 ];
 
@@ -13,12 +16,12 @@ export default function Layout() {
   return (
     <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
-      <aside className="w-56 bg-white border-r border-gray-200 flex flex-col">
+      <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
         <div className="p-4 border-b border-gray-100">
-          <p className="text-lg font-bold text-gray-800">⭐ NSP Email</p>
+          <p className="text-lg font-bold text-gray-800">⭐ NSP Sales Hub</p>
           <p className="text-xs text-gray-400">Northern Star Painters</p>
         </div>
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
           {navItems.map(({ to, icon, label }) => (
             <NavLink
               key={to}

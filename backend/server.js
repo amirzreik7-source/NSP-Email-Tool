@@ -5,7 +5,7 @@ import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Lazy-load Anthropic only when needed (avoids crash if key missing)
+// Lazy-load Anthropic only when needed
 let claude = null;
 async function getClaude() {
   if (!claude && process.env.CLAUDE_API_KEY) {
@@ -26,12 +26,14 @@ app.use(express.json({ limit: '10mb' }));
 const distPath = path.resolve(__dirname, '..', 'frontend', 'dist');
 app.use(express.static(distPath));
 
-// Claude initialized lazily via getClaude()
-
 // ── Health check ──
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', phase: 2 });
 });
+
+// ══════════════════════════════════════════
+// PHASE 1: AI & SENDING
+// ══════════════════════════════════════════
 
 // ── AI: Analyze list ──
 app.post('/api/ai/analyze-list', async (req, res) => {
@@ -62,7 +64,7 @@ Return this exact JSON structure:
     "averageJobValue": number
   },
   "patterns": ["pattern1", "pattern2"],
-  "persona": "One paragraph describing who these people are and their relationship to the business",
+  "persona": "One paragraph describing who these people are",
   "recommendedSender": "amirz@northernstarpainters.com" or "mary@northernstarpainters.com",
   "recommendedTone": "warm_personal" or "professional" or "friendly",
   "segmentOpportunities": [
@@ -123,6 +125,228 @@ ONLY return JSON.`
   }
 });
 
+// ══════════════════════════════════════════
+// PHASE 2: SMART OUTREACH ENGINE
+// ══════════════════════════════════════════
+
+// ── AI: Generate UNIQUE email per contact ──
+app.post('/api/ai/generate-unique-email', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { contact, senderName, senderEmail, tone, goal, listPersona } = req.body;
+
+    const jobHistory = (contact.jobHistory || []).map(j =>
+      `${j.jobType} in ${j.jobDate ? new Date(j.jobDate).getFullYear() : 'unknown'} ($${j.jobValue || 'unknown'}) with ${j.salesRep || 'unknown'}`
+    ).join('; ');
+
+    const notes = contact.intelligenceProfile?.personalNotes || '';
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: `You are ${senderName} from Northern Star Painters, a house painting company in Northern Virginia. Write a personal email to ONE specific person. This should read like a real human wrote it — not a template. No marketing language. No "Dear valued customer." Write like you're texting a friend about business.`,
+      messages: [{
+        role: 'user',
+        content: `Write a personal email to this specific person:
+
+Name: ${contact.firstName} ${contact.lastName}
+City: ${contact.address?.city || 'Northern Virginia'}
+Job History: ${jobHistory || 'None on record'}
+Personal Notes: ${notes || 'None'}
+Engagement: ${contact.engagement?.engagementTrend || 'new'} (score: ${contact.engagement?.engagementScore || 0})
+List Context: ${listPersona || 'Painting customer in Northern Virginia'}
+
+Sender: ${senderName} (${senderEmail})
+Tone: ${tone}
+Goal: ${goal}
+
+Return JSON:
+{
+  "subject": "Personal subject line for this specific person",
+  "bodyHTML": "HTML email body — personal, specific to this person",
+  "bodyText": "Plain text version"
+}
+
+ONLY return JSON.`
+      }],
+    });
+
+    const text = message.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    console.error('AI unique email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── AI: Generate text message ──
+app.post('/api/ai/generate-text', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { contact, senderName, goal, conversationHistory } = req.body;
+
+    const notes = contact.intelligenceProfile?.personalNotes || '';
+    const history = (conversationHistory || []).map(m => `${m.from}: ${m.text}`).join('\n');
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 256,
+      system: `You are ${senderName} from Northern Star Painters. Write SHORT text messages (under 160 chars ideally, max 300). Sound like a real person texting — casual, friendly, no marketing speak. Never start with "Hi" followed by a comma.`,
+      messages: [{
+        role: 'user',
+        content: `Write a text message to:
+Name: ${contact.firstName} ${contact.lastName}
+City: ${contact.address?.city || ''}
+Personal Notes: ${notes || 'None'}
+Goal: ${goal}
+${history ? 'Conversation so far:\n' + history : 'This is the first message.'}
+
+Return JSON:
+{ "text": "The text message to send" }
+
+ONLY return JSON.`
+      }],
+    });
+
+    const text = message.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    console.error('AI text gen error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── AI: Draft reply to incoming text ──
+app.post('/api/ai/draft-reply', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { contact, senderName, incomingMessage, conversationHistory } = req.body;
+
+    const notes = contact.intelligenceProfile?.personalNotes || '';
+    const history = (conversationHistory || []).map(m => `${m.from}: ${m.text}`).join('\n');
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 256,
+      system: `You are ${senderName} from Northern Star Painters. Draft a reply to a customer's text message. Keep it short, personal, and aim to move toward booking an estimate. Sound natural — like a real person texting.`,
+      messages: [{
+        role: 'user',
+        content: `Customer: ${contact.firstName} ${contact.lastName} (${contact.address?.city || ''})
+Personal Notes: ${notes || 'None'}
+Conversation:
+${history}
+${contact.firstName}: ${incomingMessage}
+
+Draft ${senderName}'s reply. Return JSON:
+{ "text": "The reply text" }
+
+ONLY return JSON.`
+      }],
+    });
+
+    const text = message.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    console.error('AI reply draft error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── AI: Calculate relationship score ──
+app.post('/api/ai/relationship-score', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { contact } = req.body;
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 256,
+      system: `Score the relationship strength between a painting company and a contact. Return a score 1-10 and recommended sender.`,
+      messages: [{
+        role: 'user',
+        content: `Contact: ${contact.firstName} ${contact.lastName}
+City: ${contact.address?.city || 'unknown'}
+Lists: ${(contact.lists || []).map(l => l.listName + ' (' + l.tier + ')').join(', ')}
+Job History: ${(contact.jobHistory || []).map(j => j.jobType + ' ' + j.jobDate + ' $' + j.jobValue + ' rep:' + j.salesRep).join('; ') || 'None'}
+Personal Notes: ${contact.intelligenceProfile?.personalNotes || 'None'}
+Engagement: score=${contact.engagement?.engagementScore || 0}, trend=${contact.engagement?.engagementTrend || 'new'}, opens=${contact.engagement?.totalOpens || 0}
+
+Return JSON:
+{
+  "score": 1-10,
+  "recommendedSender": "amirz@northernstarpainters.com" or "mary@northernstarpainters.com",
+  "reasoning": "Brief explanation"
+}
+
+ONLY return JSON.`
+      }],
+    });
+
+    const text = message.content[0].text;
+    const json = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (error) {
+    console.error('AI scoring error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Send SMS via Brevo ──
+app.post('/api/send/sms', async (req, res) => {
+  try {
+    const { to, text, sender } = req.body;
+
+    const response = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+      body: JSON.stringify({
+        type: 'transactional',
+        unicodeEnabled: true,
+        sender: sender || 'NSPainters',
+        recipient: to.replace(/[^0-9+]/g, ''),
+        content: text,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'SMS send failed');
+    res.json({ success: true, messageId: data.reference });
+  } catch (error) {
+    console.error('SMS send error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Click tracking redirect ──
+app.get('/api/track/click', (req, res) => {
+  const { c: contactId, u: url, cam: campaignId } = req.query;
+  // Log the click (frontend will store in Firestore)
+  console.log(`Click: contact=${contactId} campaign=${campaignId} url=${url}`);
+  // Redirect to actual URL
+  res.redirect(url || 'https://northernstarpainters.com');
+});
+
+// ── Open tracking pixel ──
+app.get('/api/track/open', (req, res) => {
+  const { c: contactId, cam: campaignId } = req.query;
+  console.log(`Open: contact=${contactId} campaign=${campaignId}`);
+  // Return 1x1 transparent pixel
+  const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-cache, no-store', 'Content-Length': pixel.length });
+  res.end(pixel);
+});
+
+// ══════════════════════════════════════════
+// PHASE 1: SENDING (unchanged)
+// ══════════════════════════════════════════
+
 // ── Send via Brevo ──
 app.post('/api/send/brevo', async (req, res) => {
   try {
@@ -154,7 +378,6 @@ app.post('/api/send/titan', async (req, res) => {
   try {
     const { fromEmail, fromName, toEmail, toName, subject, htmlContent, textContent } = req.body;
 
-    // Pick credentials based on sender
     const isAmir = fromEmail.toLowerCase().includes('amirz');
     const smtpUser = isAmir ? process.env.TITAN_AMIR_EMAIL : process.env.TITAN_MARY_EMAIL;
     const smtpPass = isAmir ? process.env.TITAN_AMIR_PASSWORD : process.env.TITAN_MARY_PASSWORD;
@@ -216,7 +439,6 @@ app.post('/api/send/batch', async (req, res) => {
       }
     }
 
-    // 2-second delay between batches
     if (i + batchSize < contacts.length) await new Promise(r => setTimeout(r, 2000));
   }
 

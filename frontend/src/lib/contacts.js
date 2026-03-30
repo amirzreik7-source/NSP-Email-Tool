@@ -121,3 +121,59 @@ export async function addUnsubscribe(userId, email, campaignId) {
     userId, email: email.toLowerCase().trim(), unsubscribedDate: new Date().toISOString(), campaignId, reason: 'manual'
   });
 }
+
+// ── Engagement Tracking ──
+
+export async function trackOpen(contactId) {
+  const ref = doc(db, CONTACTS_COL, contactId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const data = snap.data();
+  const eng = data.engagement || {};
+  await updateDoc(ref, {
+    'engagement.totalOpens': (eng.totalOpens || 0) + 1,
+    'engagement.engagementScore': Math.min(100, (eng.engagementScore || 0) + 5),
+    'engagement.lastOpenDate': new Date().toISOString(),
+    'engagement.engagementTrend': calculateTrend(eng),
+  });
+}
+
+export async function trackClick(contactId) {
+  const ref = doc(db, CONTACTS_COL, contactId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const data = snap.data();
+  const eng = data.engagement || {};
+  await updateDoc(ref, {
+    'engagement.totalClicks': (eng.totalClicks || 0) + 1,
+    'engagement.engagementScore': Math.min(100, (eng.engagementScore || 0) + 15),
+    'engagement.lastClickDate': new Date().toISOString(),
+    'engagement.engagementTrend': calculateTrend(eng),
+  });
+}
+
+export async function trackCampaignSent(contactId) {
+  const ref = doc(db, CONTACTS_COL, contactId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const data = snap.data();
+  await updateDoc(ref, {
+    'engagement.campaignsReceived': (data.engagement?.campaignsReceived || 0) + 1,
+  });
+}
+
+export async function updateRelationshipScore(contactId, score, recommendedSender) {
+  await updateDoc(doc(db, CONTACTS_COL, contactId), {
+    'engagement.relationshipScore': score,
+    'engagement.recommendedSender': recommendedSender,
+  });
+}
+
+function calculateTrend(eng) {
+  const lastOpen = eng.lastOpenDate ? new Date(eng.lastOpenDate) : null;
+  const daysSinceOpen = lastOpen ? (Date.now() - lastOpen.getTime()) / (1000 * 60 * 60 * 24) : 999;
+  if (daysSinceOpen < 7) return 'rising';
+  if (daysSinceOpen < 30) return 'stable';
+  if (daysSinceOpen < 90) return 'cooling';
+  return 'dormant';
+}
