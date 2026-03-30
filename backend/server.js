@@ -5,12 +5,27 @@ import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Lazy-load Anthropic only when needed
+// Load keys from env OR from .env file on disk
+import { readFileSync } from 'fs';
+let envKeys = {};
+try {
+  const envFile = readFileSync(path.resolve(__dirname, '.env'), 'utf-8');
+  envFile.split('\n').forEach(line => {
+    const [k, ...v] = line.split('=');
+    if (k && v.length) envKeys[k.trim()] = v.join('=').trim();
+  });
+} catch(e) {}
+
+function getKey(name) {
+  return process.env[name] || envKeys[name] || '';
+}
+
 let claude = null;
 async function getClaude() {
-  if (!claude && process.env.CLAUDE_API_KEY) {
+  const key = getKey('CLAUDE_API_KEY');
+  if (!claude && key) {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+    claude = new Anthropic({ apiKey: key });
   }
   return claude;
 }
@@ -31,10 +46,10 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     phase: 2,
-    hasClaudeKey: !!process.env.CLAUDE_API_KEY,
-    claudeKeyPrefix: process.env.CLAUDE_API_KEY ? process.env.CLAUDE_API_KEY.substring(0, 10) + '...' : 'MISSING',
-    hasBrevoKey: !!process.env.BREVO_API_KEY,
-    envCount: Object.keys(process.env).filter(k => k.startsWith('CLAUDE') || k.startsWith('BREVO') || k.startsWith('TITAN')).length,
+    hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
+    claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
+    hasBrevoKey: !!getKey('BREVO_API_KEY'),
+    envSource: getKey('CLAUDE_API_KEY') ? (process.env.CLAUDE_API_KEY ? 'env' : 'file') : 'none',
   });
 });
 
@@ -312,7 +327,7 @@ app.post('/api/send/sms', async (req, res) => {
 
     const response = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
       method: 'POST',
-      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
       body: JSON.stringify({
         type: 'transactional',
         unicodeEnabled: true,
@@ -361,7 +376,7 @@ app.post('/api/send/brevo', async (req, res) => {
 
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
-      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
       body: JSON.stringify({
         sender: { name: fromName, email: fromEmail },
         to: [{ email: toEmail, name: toName || '' }],
@@ -386,12 +401,12 @@ app.post('/api/send/titan', async (req, res) => {
     const { fromEmail, fromName, toEmail, toName, subject, htmlContent, textContent } = req.body;
 
     const isAmir = fromEmail.toLowerCase().includes('amirz');
-    const smtpUser = isAmir ? process.env.TITAN_AMIR_EMAIL : process.env.TITAN_MARY_EMAIL;
-    const smtpPass = isAmir ? process.env.TITAN_AMIR_PASSWORD : process.env.TITAN_MARY_PASSWORD;
+    const smtpUser = isAmir ? getKey('TITAN_AMIR_EMAIL') : getKey('TITAN_MARY_EMAIL');
+    const smtpPass = isAmir ? getKey('TITAN_AMIR_PASSWORD') : getKey('TITAN_MARY_PASSWORD');
 
     const transporter = nodemailer.createTransport({
-      host: process.env.TITAN_SMTP_HOST || 'smtp.titan.email',
-      port: parseInt(process.env.TITAN_SMTP_PORT || '465'),
+      host: getKey('TITAN_SMTP_HOST') || 'smtp.titan.email',
+      port: parseInt(getKey('TITAN_SMTP_PORT') || '465'),
       secure: true,
       auth: { user: smtpUser, pass: smtpPass },
     });
