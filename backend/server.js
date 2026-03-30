@@ -28,8 +28,12 @@ app.use(express.static(path.join(__dirname, '..', 'frontend', 'dist')));
 // Claude initialized lazily via getClaude()
 
 // ── Health check ──
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  const { readdirSync } = await import('fs');
+  const distPath = path.join(__dirname, '..', 'frontend', 'dist');
+  let files = [];
+  try { files = readdirSync(distPath); } catch(e) { files = ['ERROR: ' + e.message]; }
+  res.json({ status: 'ok', distPath, files, cwd: process.cwd(), dirname: __dirname });
 });
 
 // ── AI: Analyze list ──
