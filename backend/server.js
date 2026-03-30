@@ -414,33 +414,28 @@ app.post('/api/send/brevo', async (req, res) => {
 
 // ── Send via Titan SMTP ──
 app.post('/api/send/titan', async (req, res) => {
+  // Titan SMTP unreliable from cloud — fallback to Brevo with same sender identity
   try {
     const { fromEmail, fromName, toEmail, toName, subject, htmlContent, textContent } = req.body;
-
-    const isAmir = fromEmail.toLowerCase().includes('amirz');
-    const smtpUser = isAmir ? getKey('TITAN_AMIR_EMAIL') : getKey('TITAN_MARY_EMAIL');
-    const smtpPass = isAmir ? getKey('TITAN_AMIR_PASSWORD') : getKey('TITAN_MARY_PASSWORD');
-
-    const transporter = nodemailer.createTransport({
-      host: getKey('TITAN_SMTP_HOST') || 'smtp.titan.email',
-      port: parseInt(getKey('TITAN_SMTP_PORT') || '465'),
-      secure: true,
-      auth: { user: smtpUser, pass: smtpPass },
-    });
-
     const footer = `<br><br><p style="font-size:11px;color:#999;text-align:center;">Northern Star Painters | 4600 South Four Mile Run Drive, Arlington, VA 22204</p>`;
 
-    const info = await transporter.sendMail({
-      from: `"${fromName}" <${fromEmail}>`,
-      to: toName ? `"${toName}" <${toEmail}>` : toEmail,
-      subject,
-      html: htmlContent + footer,
-      text: textContent,
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: toEmail, name: toName || '' }],
+        subject,
+        htmlContent: htmlContent + footer,
+        textContent,
+      }),
     });
 
-    res.json({ success: true, messageId: info.messageId });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Send failed');
+    res.json({ success: true, messageId: data.messageId });
   } catch (error) {
-    console.error('Titan send error:', error);
+    console.error('Send error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -462,22 +457,16 @@ app.post('/api/send/batch', async (req, res) => {
         const text = personalizeTemplate(textTemplate, contact);
         const subj = personalizeTemplate(subject, contact);
 
-        if (method === 'titan_disabled_use_brevo') { // Titan SMTP blocked from Railway — using Brevo for all sends
-          const isAmir = fromEmail.toLowerCase().includes('amirz');
-          const transporter = nodemailer.createTransport({
-            host: getKey('TITAN_SMTP_HOST') || 'smtp.titan.email',
-            port: parseInt(getKey('TITAN_SMTP_PORT') || '465'),
-            secure: true,
-            auth: { user: isAmir ? getKey('TITAN_AMIR_EMAIL') : getKey('TITAN_MARY_EMAIL'), pass: isAmir ? getKey('TITAN_AMIR_PASSWORD') : getKey('TITAN_MARY_PASSWORD') },
-          });
-          await transporter.sendMail({ from: `"${fromName}" <${fromEmail}>`, to: contact.email, subject: subj, html, text });
-        } else {
-          const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
-            method: 'POST',
-            headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
-            body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: contact.email, name: contact.firstName || '' }], subject: subj, htmlContent: html, textContent: text }),
-          });
-          if (!brevoRes.ok) throw new Error('Brevo failed');
+        // Always use Brevo for reliable delivery — Brevo sends FROM any address
+        // Titan SMTP has connectivity issues from cloud servers
+        const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: { 'accept': 'application/json', 'content-type': 'application/json', 'api-key': getKey('BREVO_API_KEY') },
+          body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: contact.email, name: contact.firstName || '' }], subject: subj, htmlContent: html, textContent: text }),
+        });
+        if (!brevoRes.ok) {
+          const errData = await brevoRes.json().catch(() => ({}));
+          throw new Error(errData.message || 'Brevo failed');
         }
 
         results.sent++;
