@@ -62,7 +62,7 @@ app.use(express.static(distPath));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    phase: 5,
+    phase: 6,
     hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
     claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
     hasBrevoKey: !!getKey('BREVO_API_KEY'),
@@ -761,6 +761,257 @@ app.post('/api/audience/generate-segments', (req, res) => {
   }));
 
   res.json(result);
+});
+
+// ══════════════════════════════════════════
+// PHASE 6: AUTOMATION LAYER
+// ══════════════════════════════════════════
+
+// ── Saturday Night Engine: New Lead Webhook ──
+// THIS IS THE ONLY AUTO-SEND IN THE SYSTEM
+app.post('/api/webhooks/new-lead', async (req, res) => {
+  const secret = req.headers['x-webhook-secret'];
+  const expectedSecret = getKey('WEBHOOK_SECRET');
+  // Verify webhook if secret is configured
+  if (expectedSecret && secret !== expectedSecret) {
+    return res.status(401).json({ error: 'Invalid webhook secret' });
+  }
+
+  const { firstName, lastName, email, phone, address, serviceType, message, source } = req.body;
+  if (!firstName && !email && !phone) return res.status(400).json({ error: 'Missing contact data' });
+
+  const autoSendMinutes = parseInt(getKey('SNE_AUTO_SEND_MINUTES')) || 15;
+  const autoSendTime = new Date(Date.now() + autoSendMinutes * 60 * 1000).toISOString();
+
+  // Store in Saturday Night Queue
+  if (!global._sneQueue) global._sneQueue = [];
+  const queueItem = {
+    id: 'sne_' + Date.now(),
+    firstName: firstName || '',
+    lastName: lastName || '',
+    email: email || '',
+    phone: phone || '',
+    address: address || '',
+    serviceType: serviceType || '',
+    message: message || '',
+    source: source || 'website_form',
+    receivedAt: new Date().toISOString(),
+    autoSendTime,
+    autoSendMinutes,
+    status: 'pending',
+    aiResponse: null,
+  };
+
+  // Generate AI response immediately
+  try {
+    const ai = await getClaude();
+    if (ai) {
+      const msg = await ai.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 512,
+        system: 'You are Amir from Northern Star Painters. Write a text message response to a website inquiry. Be personal, reference their specific needs, suggest a quick estimate visit. Under 300 characters.',
+        messages: [{ role: 'user', content: `New website inquiry from ${firstName} ${lastName}. Email: ${email}. Phone: ${phone}. Address: ${address}. Service: ${serviceType}. Message: "${message}". Respond as Amir. Return JSON: {"text":"...","email":{"subject":"...","body":"..."}}\nONLY JSON.` }],
+      });
+      const text = msg.content[0].text;
+      queueItem.aiResponse = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    }
+  } catch(e) { console.error('SNE AI error:', e.message); }
+
+  global._sneQueue.push(queueItem);
+
+  // Set auto-send timer — THIS IS THE ONLY AUTO-SEND IN THE SYSTEM
+  if (autoSendMinutes > 0 && queueItem.aiResponse) {
+    setTimeout(async () => {
+      const item = global._sneQueue.find(i => i.id === queueItem.id);
+      if (item && item.status === 'pending') {
+        // Auto-send text if phone available, otherwise email
+        try {
+          if (item.phone) {
+            await fetch(`http://localhost:${PORT}/api/send/sms`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to: item.phone, text: item.aiResponse.text, sender: 'NSPainters' }),
+            });
+          } else if (item.email) {
+            await fetch(`http://localhost:${PORT}/api/send/brevo`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fromEmail: 'amirz@northernstarpainters.com', fromName: 'Amir Zreik', toEmail: item.email, toName: item.firstName, subject: item.aiResponse.email?.subject || 'Northern Star Painters', htmlContent: `<p>${item.aiResponse.email?.body || item.aiResponse.text}</p>`, textContent: item.aiResponse.text }),
+            });
+          }
+          item.status = 'auto_sent';
+          item.sentAt = new Date().toISOString();
+          console.log('SNE auto-sent to', item.firstName, item.lastName);
+        } catch(e) { console.error('SNE auto-send error:', e.message); item.status = 'error'; }
+      }
+    }, autoSendMinutes * 60 * 1000);
+  }
+
+  res.json({ ok: true, queueId: queueItem.id, autoSendTime });
+});
+
+// ── Saturday Night Engine Queue ──
+app.get('/api/saturday-night/queue', (req, res) => {
+  res.json(global._sneQueue || []);
+});
+
+app.post('/api/saturday-night/send/:id', async (req, res) => {
+  const item = (global._sneQueue || []).find(i => i.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  if (!item.aiResponse) return res.status(400).json({ error: 'No AI response generated' });
+
+  try {
+    if (item.phone) {
+      await fetch(`http://localhost:${PORT}/api/send/sms`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: item.phone, text: item.aiResponse.text, sender: 'NSPainters' }),
+      });
+    } else if (item.email) {
+      await fetch(`http://localhost:${PORT}/api/send/brevo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromEmail: 'amirz@northernstarpainters.com', fromName: 'Amir Zreik', toEmail: item.email, toName: item.firstName, subject: item.aiResponse.email?.subject || 'Re: Your Painting Inquiry', htmlContent: `<p>${item.aiResponse.email?.body || item.aiResponse.text}</p>`, textContent: item.aiResponse.text }),
+      });
+    }
+    item.status = 'manual_sent';
+    item.sentAt = new Date().toISOString();
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/saturday-night/dismiss/:id', (req, res) => {
+  const item = (global._sneQueue || []).find(i => i.id === req.params.id);
+  if (item) item.status = 'dismissed';
+  res.json({ ok: true });
+});
+
+// ── System Health ──
+app.get('/api/system-health', (req, res) => {
+  res.json(global._systemHealth || {
+    stormScore: { lastRun: null, status: 'idle', updated: 0 },
+    fairfaxDeeds: { lastRun: null, status: 'idle', leadsFound: 0 },
+    arlingtonDeeds: { lastRun: null, status: 'idle', leadsFound: 0 },
+    loudounDeeds: { lastRun: null, status: 'idle', leadsFound: 0 },
+    alexandriaDeeds: { lastRun: null, status: 'idle', leadsFound: 0 },
+    mdSdat: { lastRun: null, status: 'idle', leadsFound: 0 },
+    permits: { lastRun: null, status: 'idle', leadsFound: 0 },
+    skipTrace: { lastRun: null, status: 'idle', processed: 0, matched: 0 },
+    streetView: { lastRun: null, status: 'idle', analyzed: 0 },
+    outreach: { lastRun: null, status: 'idle', generated: 0 },
+    overallStatus: 'operational',
+    lastLeadTime: null,
+  });
+});
+
+// ── Manual Cron Trigger ──
+app.post('/api/cron/run/:jobName', (req, res) => {
+  const { jobName } = req.params;
+  if (!global._systemHealth) global._systemHealth = {};
+  global._systemHealth[jobName] = { status: 'running', startedAt: new Date().toISOString() };
+  res.json({ status: 'started', job: jobName });
+});
+
+// ── Notifications ──
+if (!global._notifications) global._notifications = [];
+
+app.get('/api/notifications', (req, res) => {
+  res.json(global._notifications.slice(-50));
+});
+
+app.post('/api/notifications', (req, res) => {
+  const { type, title, body, actionUrl } = req.body;
+  global._notifications.push({ id: 'n_' + Date.now(), type, title, body, actionUrl, read: false, timestamp: new Date().toISOString() });
+  if (global._notifications.length > 200) global._notifications = global._notifications.slice(-200);
+  res.json({ ok: true });
+});
+
+app.post('/api/notifications/:id/read', (req, res) => {
+  const n = global._notifications.find(n => n.id === req.params.id);
+  if (n) n.read = true;
+  res.json({ ok: true });
+});
+
+// ── Daily Digest ──
+app.post('/api/digest/send', async (req, res) => {
+  const digestEmail = getKey('DAILY_DIGEST_EMAIL') || 'amirz@northernstarpainters.com';
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const sneQueue = (global._sneQueue || []).filter(i => i.status === 'pending').length;
+  const health = global._systemHealth || {};
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a1a1a;">
+      <div style="background:#1e3a8a;color:white;padding:20px;text-align:center;">
+        <h1 style="margin:0;font-size:20px;">⭐ Northern Star Intelligence</h1>
+        <p style="margin:5px 0 0;opacity:0.8;font-size:14px;">${today}</p>
+      </div>
+      <div style="padding:20px;">
+        <h2 style="color:#1e3a8a;font-size:16px;">Today at a Glance</h2>
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:10px;text-align:center;background:#f0f5ff;border-radius:8px;"><strong style="font-size:24px;color:#1e3a8a;">${health.fairfaxDeeds?.leadsFound || 0}</strong><br><span style="font-size:12px;color:#666;">New Leads</span></td>
+            <td style="width:10px;"></td>
+            <td style="padding:10px;text-align:center;background:#f0fdf4;border-radius:8px;"><strong style="font-size:24px;color:#16a34a;">${sneQueue}</strong><br><span style="font-size:12px;color:#666;">Pending Queue</span></td>
+          </tr>
+        </table>
+        <h2 style="color:#1e3a8a;font-size:16px;margin-top:20px;">System Health</h2>
+        <p style="font-size:14px;color:#666;">All systems: ${health.overallStatus || 'operational'}</p>
+        <div style="text-align:center;margin-top:20px;">
+          <a href="https://nsp-email-tool-production.up.railway.app" style="background:#1e3a8a;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;font-size:14px;">Open Dashboard →</a>
+        </div>
+      </div>
+    </div>`;
+
+  try {
+    await fetch(`http://localhost:${PORT}/api/send/brevo`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromEmail: 'amirz@northernstarpainters.com', fromName: 'NSP Intelligence', toEmail: digestEmail, toName: 'Amir', subject: `⭐ NSP Daily Update — ${today}`, htmlContent: html, textContent: 'Daily update from Northern Star Intelligence System' }),
+    });
+    res.json({ ok: true, sentTo: digestEmail });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Voicemail Drop (Slybroadcast placeholder) ──
+app.post('/api/voicemail/drop/:contactId', async (req, res) => {
+  const { templateId } = req.body;
+  const username = getKey('SLYBROADCAST_USERNAME');
+  const password = getKey('SLYBROADCAST_PASSWORD');
+  const callerId = getKey('SLYBROADCAST_CALLER_ID');
+
+  if (!username || !password) {
+    return res.json({ status: 'not_configured', message: 'Slybroadcast not configured. Add SLYBROADCAST_USERNAME and SLYBROADCAST_PASSWORD.' });
+  }
+
+  // Slybroadcast API integration placeholder
+  res.json({ status: 'ready', message: 'Slybroadcast configured — voicemail drop ready when template recordings are uploaded.' });
+});
+
+app.get('/api/voicemail/templates', (req, res) => {
+  res.json([
+    { id: 'new_home', name: 'New Home Buyer', description: 'For recently moved homeowners' },
+    { id: 'estimate_followup', name: 'Estimate Follow-Up', description: 'After sending an estimate' },
+    { id: 'reengagement', name: 'Re-engagement', description: 'Haven\'t heard from them in a while' },
+    { id: 'post_storm', name: 'Post-Storm Check', description: 'After severe weather' },
+    { id: 'general', name: 'General Outreach', description: 'General purpose' },
+  ]);
+});
+
+// ── Google Ads Customer Match (placeholder) ──
+app.post('/api/ads/sync/google', async (req, res) => {
+  const clientId = getKey('GOOGLE_ADS_CLIENT_ID');
+  if (!clientId) return res.json({ status: 'not_configured', message: 'Google Ads not connected. See Settings → Ad Platform Connections.' });
+  // OAuth flow + Customer Match API would go here
+  res.json({ status: 'ready', message: 'Google Ads configured — connect account in Settings to activate sync.' });
+});
+
+// ── Meta Ads Custom Audiences (placeholder) ──
+app.post('/api/ads/sync/meta', async (req, res) => {
+  const appId = getKey('META_APP_ID');
+  if (!appId) return res.json({ status: 'not_configured', message: 'Meta Ads not connected. See Settings → Ad Platform Connections.' });
+  res.json({ status: 'ready', message: 'Meta Ads configured — connect account in Settings to activate sync.' });
+});
+
+app.get('/api/ads/sync/status', (req, res) => {
+  res.json({
+    google: { connected: !!getKey('GOOGLE_ADS_CLIENT_ID'), lastSync: null, status: getKey('GOOGLE_ADS_CLIENT_ID') ? 'ready' : 'not_connected' },
+    meta: { connected: !!getKey('META_APP_ID'), lastSync: null, status: getKey('META_APP_ID') ? 'ready' : 'not_connected' },
+  });
 });
 
 // ══════════════════════════════════════════

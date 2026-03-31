@@ -18,7 +18,9 @@ const navItems = [
   { to: '/intelligence', icon: '🧠', label: 'Intelligence' },
   { to: '/referrals', icon: '🔗', label: 'Referrals' },
   { to: '/voice', icon: '🎤', label: 'Voice Learning' },
+  { to: '/saturday-night', icon: '🌙', label: 'Auto-Respond' },
   { to: '/ad-export', icon: '📤', label: 'Ad Export' },
+  { to: '/system-health', icon: '🔧', label: 'System Health' },
   { to: '/settings', icon: '⚙️', label: 'Settings' },
 ];
 
