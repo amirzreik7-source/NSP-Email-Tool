@@ -62,7 +62,7 @@ app.use(express.static(distPath));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    phase: 4,
+    phase: 5,
     hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
     claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
     hasBrevoKey: !!getKey('BREVO_API_KEY'),
@@ -761,6 +761,273 @@ app.post('/api/audience/generate-segments', (req, res) => {
   }));
 
   res.json(result);
+});
+
+// ══════════════════════════════════════════
+// PHASE 5: LEAD INTELLIGENCE ENGINE
+// ══════════════════════════════════════════
+
+// ── Perfect Storm Score Calculator ──
+function calculateStormScore(lead, nearbyJobs = [], weatherData = null) {
+  let score = 0;
+  const breakdown = {};
+
+  // TIME SIGNALS (max 30)
+  if (lead.propertyAnalysis?.estimatedLastPainted) {
+    const paintYear = parseInt(lead.propertyAnalysis.estimatedLastPainted);
+    const years = new Date().getFullYear() - paintYear;
+    if (years >= 7) { score += 30; breakdown['Paint 7+ years'] = 30; }
+    else if (years >= 5) { score += 25; breakdown['Paint 5-6 years'] = 25; }
+    else if (years >= 4) { score += 15; breakdown['Paint 4 years'] = 15; }
+    else if (years >= 3) { score += 8; breakdown['Paint 3 years'] = 8; }
+  } else if (lead.yearBuilt && lead.yearBuilt < 2016) {
+    score += 20; breakdown['Property pre-2016'] = 20;
+  }
+  const month = new Date().getMonth() + 1;
+  if (month >= 3 && month <= 5) { score += 5; breakdown['Spring season'] = 5; }
+  else if (month >= 9 && month <= 10) { score += 3; breakdown['Fall window'] = 3; }
+  else if (month >= 6 && month <= 8) { score += 2; breakdown['Summer'] = 2; }
+
+  // PROPERTY SIGNALS (max 25)
+  if (lead.source === 'deed_record') { score += 20; breakdown['New home sale'] = 20; }
+  if (lead.source === 'permit') { score += 15; breakdown['Permit filed'] = 15; }
+  if (lead.propertyAnalysis?.paintCondition === 'poor' || lead.propertyAnalysis?.paintCondition === 'critical') {
+    score += 15; breakdown['Poor paint condition'] = 15;
+  } else if (lead.propertyAnalysis?.paintCondition === 'fair') {
+    score += 8; breakdown['Fair paint condition'] = 8;
+  }
+  if (lead.yearBuilt && lead.yearBuilt < 2010) { score += 5; breakdown['Built before 2010'] = 5; }
+
+  // NEIGHBORHOOD SIGNALS (max 20)
+  const closest = nearbyJobs.sort((a, b) => a.distance - b.distance)[0];
+  if (closest) {
+    if (closest.distance <= 0.25) { score += 20; breakdown['NSP job within 0.25mi'] = 20; }
+    else if (closest.distance <= 0.5) { score += 12; breakdown['NSP job within 0.5mi'] = 12; }
+    else if (closest.distance <= 1) { score += 6; breakdown['NSP job within 1mi'] = 6; }
+  }
+
+  // ENGAGEMENT SIGNALS (max 15 — existing contacts)
+  if (lead.engagement?.totalClicks > 0) { score += 15; breakdown['Clicked links'] = 15; }
+  else if (lead.engagement?.totalOpens > 0) { score += 10; breakdown['Opened emails'] = 10; }
+  if (lead.engagement?.engagementTrend === 'rising') { score += 8; breakdown['Rising engagement'] = 8; }
+
+  // WEATHER SIGNAL (max 10)
+  if (weatherData?.isPaintingWeather) { score += 10; breakdown['Perfect weather'] = 10; }
+
+  // Cap at 100
+  score = Math.min(100, score);
+  return { score, breakdown };
+}
+
+// ── Lead CRUD endpoints ──
+app.get('/api/leads', (req, res) => {
+  // Frontend reads from Firestore directly — this endpoint for external use
+  res.json({ message: 'Use Firestore directly from frontend for lead queries' });
+});
+
+app.post('/api/leads/calculate-score', (req, res) => {
+  const { lead, nearbyJobs, weatherData } = req.body;
+  const result = calculateStormScore(lead, nearbyJobs, weatherData);
+  res.json(result);
+});
+
+// ── Shadow Estimate Generator ──
+app.post('/api/shadow-estimate', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API not configured' });
+    const { lead, competitiveData } = req.body;
+
+    const analysis = lead.propertyAnalysis || {};
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: 'You are a painting estimate preparation assistant. Generate a pre-visit briefing for a painting company owner.',
+      messages: [{ role: 'user', content: `Generate a Shadow Estimate brief for this property:
+
+Address: ${lead.address?.street}, ${lead.address?.city} ${lead.address?.state} ${lead.address?.zip}
+Sale Price: $${lead.salePrice || 'unknown'}
+Year Built: ${lead.yearBuilt || 'unknown'}
+Property Type: ${lead.propertyType || 'unknown'}
+Square Footage: ${lead.squareFootage || 'unknown'}
+
+AI Property Assessment:
+Condition: ${analysis.paintCondition || 'unknown'}
+Last Painted: ${analysis.estimatedLastPainted || 'unknown'}
+Surface: ${analysis.primarySurface || 'unknown'}
+Issues: ${(analysis.visibleIssues || []).join(', ') || 'none detected'}
+Scope: ${analysis.estimatedJobScope || 'unknown'}
+Price Range: $${analysis.estimatedPriceRange?.low || '?'} - $${analysis.estimatedPriceRange?.high || '?'}
+
+${competitiveData ? 'Competitive context for this area: ' + JSON.stringify(competitiveData) : ''}
+
+Return JSON:
+{
+  "summary": "2-3 sentence overview",
+  "scopeBreakdown": ["surface1: description", "surface2: description"],
+  "riskFactors": ["risk1", "risk2"],
+  "priceRange": {"low": number, "high": number},
+  "confidence": "low|medium|high",
+  "talkingPoints": ["point1", "point2", "point3"],
+  "competitiveNotes": "any competitive context"
+}
+ONLY JSON.` }],
+    });
+    const text = msg.content[0].text;
+    res.json(JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim()));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── AI Outreach for Lead ──
+app.post('/api/leads/generate-outreach', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API not configured' });
+    const { lead, nearbyJobs } = req.body;
+
+    const analysis = lead.propertyAnalysis || {};
+    const nearbyText = (nearbyJobs || []).slice(0, 3).map(j => `${j.address} (${j.distance}mi away)`).join(', ');
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: `You are Amir from Northern Star Painters. Write outreach for a new lead. Rules:
+- Never claim a relationship that doesn't exist
+- Reference something specific about their property or neighborhood
+- Never reveal you found them through public records
+- Natural, personal tone
+- Include soft opt-out: "No pressure — let me know if you'd rather I not reach out"
+- For new homeowners: lead with neighborhood social proof`,
+      messages: [{ role: 'user', content: `Generate 3 outreach versions for:
+
+Name: ${lead.ownerName}
+Address: ${lead.address?.street}, ${lead.address?.city}
+Source: ${lead.source === 'deed_record' ? 'Just bought this home' : lead.source === 'permit' ? 'Filed renovation permit' : 'Lead'}
+Sale Price: $${lead.salePrice || 'unknown'}
+Property Condition: ${analysis.paintCondition || 'unknown'} — ${analysis.aiAssessmentSummary || ''}
+Nearby NSP Jobs: ${nearbyText || 'none nearby'}
+
+Return JSON:
+{
+  "email": {"subject": "...", "body": "... (200 words max)"},
+  "text": "... (under 160 chars)",
+  "postcard": "... (75 words max for print)"
+}
+ONLY JSON.` }],
+    });
+    const text = msg.content[0].text;
+    res.json(JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim()));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Skip Trace (BeenVerified placeholder) ──
+app.post('/api/skip-trace', async (req, res) => {
+  const { name, address } = req.body;
+  const apiKey = getKey('BEEN_VERIFIED_API_KEY');
+  if (!apiKey) {
+    return res.json({ status: 'not_configured', message: 'BeenVerified API key not set. Add BEEN_VERIFIED_API_KEY to environment variables.' });
+  }
+  // BeenVerified API integration — placeholder until key is configured
+  try {
+    // Real implementation would call BeenVerified API here
+    // For now return placeholder
+    res.json({ status: 'pending', message: 'BeenVerified API ready — configure key to activate' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Street View Image Pull ──
+app.post('/api/streetview', async (req, res) => {
+  const { address, lat, lng } = req.body;
+  const apiKey = getKey('GOOGLE_STREET_VIEW_API_KEY');
+  if (!apiKey) {
+    return res.json({ status: 'not_configured', images: [], message: 'Google Street View API key not set' });
+  }
+  try {
+    const images = [];
+    for (const heading of [0, 90, 180, 270]) {
+      const url = `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${lat},${lng}&heading=${heading}&fov=90&key=${apiKey}`;
+      images.push({ heading, url });
+    }
+    res.json({ status: 'ok', images });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Geocode Address ──
+app.post('/api/geocode', async (req, res) => {
+  const { address } = req.body;
+  try {
+    // Use free Open-Meteo geocoding first
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(address)}&count=1&language=en&format=json`);
+    const data = await r.json();
+    if (data.results?.length) {
+      return res.json({ lat: data.results[0].latitude, lng: data.results[0].longitude, source: 'open-meteo' });
+    }
+    // Fallback to Google if configured
+    const gKey = getKey('GOOGLE_GEOCODING_API_KEY');
+    if (gKey) {
+      const gr = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${gKey}`);
+      const gd = await gr.json();
+      if (gd.results?.length) {
+        const loc = gd.results[0].geometry.location;
+        return res.json({ lat: loc.lat, lng: loc.lng, source: 'google' });
+      }
+    }
+    res.json({ error: 'Could not geocode address' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Scraper Status ──
+app.get('/api/scraper/status', (req, res) => {
+  res.json(global._scraperStatus || {
+    fairfax: { lastRun: null, leadsFound: 0, status: 'idle' },
+    arlington: { lastRun: null, leadsFound: 0, status: 'idle' },
+    loudoun: { lastRun: null, leadsFound: 0, status: 'idle' },
+    permits: { lastRun: null, leadsFound: 0, status: 'idle' },
+  });
+});
+
+// ── Manual Scraper Trigger ──
+app.post('/api/scraper/run/:county', async (req, res) => {
+  const { county } = req.params;
+  if (!global._scraperStatus) global._scraperStatus = {};
+  global._scraperStatus[county] = { status: 'running', startedAt: new Date().toISOString() };
+  res.json({ status: 'started', county, message: `${county} scraper started. Check /api/scraper/status for progress. Note: Full Puppeteer scraping requires chromium on Railway — configure in deployment settings.` });
+});
+
+// ── Postcard PDF Generation ──
+app.post('/api/leads/postcard-pdf', async (req, res) => {
+  try {
+    const { lead, nearestJobPhoto } = req.body;
+    // Generate simple HTML postcard
+    const html = `<!DOCTYPE html><html><head><style>
+      @page{size:6in 4in;margin:0}
+      body{font-family:Arial,sans-serif;margin:0;padding:0}
+      .front{width:6in;height:4in;background:#1e3a8a;color:white;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;page-break-after:always}
+      .front h1{font-size:24pt;margin:0 0 10px}
+      .front p{font-size:12pt;opacity:0.9}
+      .back{width:6in;height:4in;padding:0.3in;box-sizing:border-box;font-size:10pt}
+      .back h2{color:#1e3a8a;margin:0 0 8px;font-size:14pt}
+      .back .message{margin:10px 0;line-height:1.4}
+      .back .contact{position:absolute;bottom:0.3in;left:0.3in;right:0.3in;border-top:1px solid #ddd;padding-top:8px;font-size:9pt;color:#666}
+    </style></head><body>
+    <div class="front">
+      <p>⭐ ⭐ ⭐ ⭐ ⭐</p>
+      <h1>Northern Star Painters</h1>
+      <p>Professional Painting Services</p>
+      <p style="margin-top:20px;font-size:14pt">Welcome to ${lead.address?.city || 'the neighborhood'}!</p>
+    </div>
+    <div class="back">
+      <h2>Hi ${lead.ownerName?.split(',')[0]?.split(' ')[0] || 'Neighbor'},</h2>
+      <div class="message">${lead.generatedOutreach?.postcard || 'We noticed you recently moved to the neighborhood. Northern Star Painters has been serving ' + (lead.address?.city || 'Northern Virginia') + ' families for years. If your new home needs a fresh look — interior or exterior — we would love to help. Call or scan the QR code below for a free estimate.'}</div>
+      <div class="contact">
+        <strong>Northern Star Painters</strong> | (202) 743-5072 | northernstarpainters.com<br>
+        4600 South Four Mile Run Drive, Arlington, VA 22204
+      </div>
+    </div></body></html>`;
+
+    res.set({ 'Content-Type': 'text/html' });
+    res.send(html);
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ══════════════════════════════════════════

@@ -21,6 +21,7 @@ import Neighborhood from './pages/Neighborhood';
 import Referrals from './pages/Referrals';
 import VoiceLearning from './pages/VoiceLearning';
 import Intelligence from './pages/Intelligence';
+import LeadFinder from './pages/LeadFinder';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/intelligence" element={<Intelligence />} />
           <Route path="/referrals" element={<Referrals />} />
           <Route path="/voice" element={<VoiceLearning />} />
+          <Route path="/lead-finder" element={<LeadFinder />} />
           <Route path="/ad-export" element={<AdExport />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

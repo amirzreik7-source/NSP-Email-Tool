@@ -3,6 +3,7 @@ import { auth, signOut } from '../lib/firebase';
 
 const navItems = [
   { to: '/', icon: '📊', label: 'Dashboard' },
+  { to: '/lead-finder', icon: '🔍', label: 'Lead Finder' },
   { to: '/hot-leads', icon: '🔥', label: 'Hot Leads' },
   { to: '/pipeline', icon: '🗺️', label: 'Pipeline' },
   { to: '/approval-queue', icon: '✅', label: 'Queue' },
