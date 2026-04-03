@@ -12,20 +12,36 @@ export default function Login() {
     setError('');
     setLoading(true);
 
-    const password = 'northern-star-' + email.replace(/[^a-zA-Z0-9]/g, '');
+    // Try multiple password formats (format changed between phases)
+    const passwords = [
+      'northern-star-' + email.replace(/[^a-zA-Z0-9]/g, ''),
+      'northern-star-' + email.toLowerCase().replace(/[^a-zA-Z0-9]/g, ''),
+      'nsp-' + email.toLowerCase().replace(/[^a-zA-Z0-9]/g, ''),
+    ];
 
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-    } catch (err) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        try {
-          await createUserWithEmailAndPassword(auth, email, password);
-        } catch (createErr) {
-          setError('Login failed: ' + createErr.message);
+    let loggedIn = false;
+    for (const password of passwords) {
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        loggedIn = true;
+        break;
+      } catch (err) {
+        if (err.code === 'auth/user-not-found') {
+          // Account doesn't exist — create with first password format
+          try {
+            await createUserWithEmailAndPassword(auth, email, passwords[0]);
+            loggedIn = true;
+          } catch (createErr) {
+            setError('Could not create account: ' + createErr.message);
+          }
+          break;
         }
-      } else {
-        setError('Login failed: ' + err.message);
+        // Otherwise try next password
       }
+    }
+
+    if (!loggedIn && !error) {
+      setError('Could not sign in. Your account exists but the password has changed. Use a new email or reset in Firebase Console.');
     }
     setLoading(false);
   };

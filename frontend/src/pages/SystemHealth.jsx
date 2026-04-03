@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { auth } from '../lib/firebase';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -89,7 +90,7 @@ export default function SystemHealth() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-6">
         <button onClick={sendDigest} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:shadow-md transition">
           <p className="font-medium text-gray-800">📧 Send Daily Digest</p>
           <p className="text-xs text-gray-500">Send morning update email now</p>
@@ -97,6 +98,18 @@ export default function SystemHealth() {
         <button onClick={() => triggerJob('stormScore')} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:shadow-md transition">
           <p className="font-medium text-gray-800">⚡ Recalculate Scores</p>
           <p className="text-xs text-gray-500">Update all Storm Scores now</p>
+        </button>
+        <button onClick={async () => {
+          try {
+            const uid = auth.currentUser?.uid;
+            if (!uid) { alert('Not logged in'); return; }
+            const res = await fetch(`${API}/api/contacts/geocode-batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: uid }) });
+            const data = await res.json();
+            alert(`Geocoded: ${data.geocoded}, Failed: ${data.failed}, Total: ${data.total}`);
+          } catch (e) { alert('Error: ' + e.message); }
+        }} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:shadow-md transition">
+          <p className="font-medium text-gray-800">📍 Geocode All Contacts</p>
+          <p className="text-xs text-gray-500">Add coordinates for proximity search</p>
         </button>
       </div>
 

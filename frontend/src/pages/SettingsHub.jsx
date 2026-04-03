@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import Settings from './Settings';
+import SenderProfiles from './SenderProfiles';
+import TrackingSettings from './TrackingSettings';
 import SystemHealth from './SystemHealth';
 import VoiceLearning from './VoiceLearning';
 import AdExport from './AdExport';
 import WeatherTriggers from './WeatherTriggers';
+import BrandProfile from './BrandProfile';
 
 export default function SettingsHub() {
-  const [section, setSection] = useState('accounts');
+  const [section, setSection] = useState('senders');
 
   const sections = [
+    { id: 'senders', label: '👤 Senders', component: SenderProfiles },
+    { id: 'brand', label: '🎨 Brand', component: BrandProfile },
+    { id: 'tracking', label: '📈 Tracking', component: TrackingSettings },
     { id: 'accounts', label: '⚙️ Accounts', component: Settings },
     { id: 'health', label: '🔧 System Health', component: SystemHealth },
     { id: 'ads', label: '📤 Ad Export', component: AdExport },

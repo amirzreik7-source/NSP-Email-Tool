@@ -62,13 +62,13 @@ export default function ListDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate('/lists')} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Back to Lists</button>
+      <button onClick={() => navigate('/contacts')} className="text-sm text-gray-500 hover:text-gray-700 mb-4">← Back to Contacts</button>
       <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">{list.name}</h1>
           <p className="text-sm text-gray-500 mt-1">{contacts.length} contacts · {list.tier} · Uploaded {new Date(list.createdAt).toLocaleDateString()}</p>
         </div>
-        <button onClick={() => navigate('/campaigns')} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">Create Campaign →</button>
+        <button onClick={() => navigate('/campaign/new', { state: { listId } })} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">Create Campaign →</button>
       </div>
 
       {list.userContext && (
@@ -137,25 +137,50 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Contact preview */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-700 text-sm">Contacts in this list ({contacts.length})</h3>
-        </div>
-        <table className="w-full text-sm">
-          <thead><tr className="bg-gray-50"><th className="text-left px-4 py-2 text-gray-500 text-xs">Name</th><th className="text-left px-4 py-2 text-gray-500 text-xs">Email</th><th className="text-left px-4 py-2 text-gray-500 text-xs">City</th></tr></thead>
-          <tbody>
-            {contacts.slice(0, 20).map(c => (
-              <tr key={c.id} className="border-b border-gray-50">
-                <td className="px-4 py-2">{c.firstName} {c.lastName}</td>
-                <td className="px-4 py-2 text-gray-500">{c.email}</td>
-                <td className="px-4 py-2 text-gray-500">{c.address?.city || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {contacts.length > 20 && <p className="text-xs text-gray-400 p-3 text-center">Showing 20 of {contacts.length}</p>}
+      {/* Contact preview with pagination */}
+      <ListContactsTable contacts={contacts} navigate={navigate} />
+    </div>
+  );
+}
+
+function ListContactsTable({ contacts, navigate }) {
+  const [page, setPage] = useState(1);
+  const perPage = 50;
+  const totalPages = Math.ceil(contacts.length / perPage);
+  const pageContacts = contacts.slice((page - 1) * perPage, page * perPage);
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h3 className="font-semibold text-gray-700 text-sm">Contacts in this list ({contacts.length})</h3>
       </div>
+      <table className="w-full text-sm">
+        <thead><tr className="bg-gray-50"><th className="text-left px-4 py-2 text-gray-500 text-xs">Name</th><th className="text-left px-4 py-2 text-gray-500 text-xs">Email</th><th className="text-left px-4 py-2 text-gray-500 text-xs">City</th><th className="text-left px-4 py-2 text-gray-500 text-xs">Score</th></tr></thead>
+        <tbody>
+          {pageContacts.map(c => (
+            <tr key={c.id} onClick={() => navigate(`/contacts/profile/${c.id}`)} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+              <td className="px-4 py-2">{c.firstName} {c.lastName}</td>
+              <td className="px-4 py-2 text-gray-500">{c.email}</td>
+              <td className="px-4 py-2 text-gray-500">{c.address?.city || '—'}</td>
+              <td className="px-4 py-2">
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${(c.engagement?.engagementScore || 0) > 50 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {c.engagement?.engagementScore || 0}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+          <p className="text-xs text-gray-500">Showing {(page - 1) * perPage + 1}–{Math.min(page * perPage, contacts.length)} of {contacts.length}</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1} className="px-3 py-1 border rounded-lg text-xs disabled:opacity-30">Previous</button>
+            <span className="text-xs text-gray-600">Page {page} of {totalPages}</span>
+            <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages} className="px-3 py-1 border rounded-lg text-xs disabled:opacity-30">Next</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,15 +3,16 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { auth, onAuthStateChanged } from './lib/firebase';
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import Today from './pages/Today';
-import Leads from './pages/Leads';
-import CampaignsHub from './pages/CampaignsHub';
+import Home from './pages/Home';
+import LeadFinder from './pages/LeadFinder';
 import ContactsHub from './pages/ContactsHub';
 import ConversationsHub from './pages/ConversationsHub';
 import Reports from './pages/Reports';
 import SettingsHub from './pages/SettingsHub';
 import ListDetail from './pages/ListDetail';
 import SaturdayNight from './pages/SaturdayNight';
+import UnifiedCampaignFlow from './pages/UnifiedCampaignFlow';
+import ContactProfile from './pages/ContactProfile';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -29,15 +30,17 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<Today />} />
-          <Route path="/leads" element={<Leads />} />
-          <Route path="/campaigns" element={<CampaignsHub />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/lead-finder" element={<LeadFinder />} />
           <Route path="/contacts" element={<ContactsHub />} />
+          <Route path="/contacts/profile/:contactId" element={<ContactProfile />} />
           <Route path="/contacts/:listId" element={<ListDetail />} />
           <Route path="/conversations" element={<ConversationsHub />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<SettingsHub />} />
           <Route path="/saturday-night" element={<SaturdayNight />} />
+          <Route path="/campaign/new" element={<UnifiedCampaignFlow />} />
+          <Route path="/campaign/:draftId" element={<UnifiedCampaignFlow />} />
         </Route>
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

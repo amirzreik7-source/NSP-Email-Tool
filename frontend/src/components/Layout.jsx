@@ -2,9 +2,8 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { auth, signOut } from '../lib/firebase';
 
 const navItems = [
-  { to: '/', icon: '⭐', label: 'Today' },
-  { to: '/leads', icon: '🔍', label: 'Leads' },
-  { to: '/campaigns', icon: '📧', label: 'Campaigns' },
+  { to: '/', icon: '🏠', label: 'Home' },
+  { to: '/lead-finder', icon: '🔍', label: 'Lead Finder' },
   { to: '/contacts', icon: '👥', label: 'Contacts' },
   { to: '/conversations', icon: '💬', label: 'Conversations' },
   { to: '/reports', icon: '📊', label: 'Reports' },
