@@ -88,8 +88,9 @@ export async function upsertContact(userId, contactData, listInfo) {
 }
 
 // Fast bulk import — loads all contacts once, checks duplicates in memory
-export async function bulkUpsertContacts(userId, rows, listInfo) {
+export async function bulkUpsertContacts(userId, rows, listInfo, onProgress) {
   // Load all existing contacts once upfront
+  if (onProgress) onProgress({ phase: 'loading', message: 'Loading existing contacts...' });
   const allExisting = await getAllContacts(userId);
   const emailMap = new Map();
   for (const c of allExisting) {
@@ -138,13 +139,17 @@ export async function bulkUpsertContacts(userId, rows, listInfo) {
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         };
         const ref = await addDoc(collection(db, CONTACTS_COL), newContact);
-        // Add to map so subsequent rows with same email are detected as duplicates
         emailMap.set(email, { id: ref.id, ...newContact });
         created++;
       }
     } catch (e) {
       failed++;
       errors.push({ row: i + 1, reason: e.message });
+    }
+
+    // Report progress every 5 rows
+    if (onProgress && ((i + 1) % 5 === 0 || i === rows.length - 1)) {
+      onProgress({ phase: 'importing', processed: i + 1, total: rows.length, created, updated, skipped, failed });
     }
   }
 

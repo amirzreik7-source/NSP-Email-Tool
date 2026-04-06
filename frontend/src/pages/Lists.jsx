@@ -310,12 +310,34 @@ function CSVUpload({ onDone }) {
       preparedRows.push(contactData);
     }
 
-    setProgress({ total: csvData.length, processed: 0, created: 0, updated: 0, skipped: preSkipped, failed: 0 });
+    setProgress({ total: csvData.length, processed: 0, created: 0, updated: 0, skipped: preSkipped, failed: 0, phase: 'preparing' });
 
-    // Bulk import — loads existing contacts once, then writes sequentially
-    const result = await bulkUpsertContacts(userId, preparedRows, listInfo);
+    if (preparedRows.length === 0) {
+      // All rows were skipped in prep — go straight to done
+      setProgress({ total: csvData.length, processed: csvData.length, created: 0, updated: 0, skipped: preSkipped, failed: 0 });
+      setImportErrors(errors);
+      setStep(6);
+      return;
+    }
 
-    // Update progress with final counts
+    // Bulk import with live progress updates
+    const result = await bulkUpsertContacts(userId, preparedRows, listInfo, (prog) => {
+      if (prog.phase === 'loading') {
+        setProgress(prev => ({ ...prev, phase: 'loading' }));
+      } else {
+        setProgress({
+          total: csvData.length,
+          processed: preSkipped + prog.processed,
+          created: prog.created,
+          updated: prog.updated,
+          skipped: preSkipped + prog.skipped,
+          failed: prog.failed,
+          phase: 'importing',
+        });
+      }
+    });
+
+    // Final counts
     setProgress({
       total: csvData.length,
       processed: csvData.length,
@@ -499,12 +521,16 @@ function CSVUpload({ onDone }) {
   if (step === 5) return (
     <div className="text-center py-10">
       <p className="text-4xl mb-4">⏳</p>
-      <h2 className="text-xl font-bold text-gray-800 mb-2">Importing...</h2>
-      <p className="text-sm text-gray-500 mb-4">{progress.processed} of {progress.total}</p>
+      <h2 className="text-xl font-bold text-gray-800 mb-2">
+        {progress.phase === 'preparing' ? 'Preparing contacts...' :
+         progress.phase === 'loading' ? 'Loading existing contacts...' :
+         'Importing...'}
+      </h2>
+      <p className="text-sm text-gray-500 mb-4">{progress.processed || 0} of {progress.total || '...'}</p>
       <div className="w-full bg-gray-200 rounded-full h-3 max-w-md mx-auto">
         <div className="bg-blue-600 h-3 rounded-full transition-all" style={{ width: `${progress.total ? (progress.processed / progress.total * 100) : 0}%` }} />
       </div>
-      <p className="text-xs text-gray-400 mt-3">{progress.created} new · {progress.updated} updated · {progress.skipped} skipped</p>
+      <p className="text-xs text-gray-400 mt-3">{progress.created || 0} new · {progress.updated || 0} updated · {progress.skipped || 0} skipped{progress.failed ? ` · ${progress.failed} failed` : ''}</p>
     </div>
   );
 
