@@ -106,9 +106,42 @@ function CSVUpload({ onDone }) {
     if (!file) return;
     const name = file.name.toLowerCase();
     if (!name.endsWith('.csv') && !name.endsWith('.txt')) { alert('Please upload a CSV file'); return; }
-    Papa.parse(file, {
-      header: true, skipEmptyLines: true,
-      complete: async (r) => {
+
+    // Read raw text first to detect and skip junk header rows
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let text = e.target.result;
+
+      // Skip junk header rows — lines that don't contain commas (single-cell rows like "Table 1")
+      // or lines with fewer fields than the next line
+      const lines = text.split('\n');
+      let skipRows = 0;
+      for (let i = 0; i < Math.min(3, lines.length); i++) {
+        const commaCount = (lines[i].match(/,/g) || []).length;
+        const nextCommaCount = i + 1 < lines.length ? (lines[i + 1].match(/,/g) || []).length : 0;
+        // If this line has very few commas but the next has many, it's a junk header
+        if (commaCount < 3 && nextCommaCount > 5) {
+          skipRows = i + 1;
+        } else {
+          break;
+        }
+      }
+
+      if (skipRows > 0) {
+        text = lines.slice(skipRows).join('\n');
+      }
+
+      Papa.parse(text, {
+        header: true, skipEmptyLines: true,
+        complete: async (r) => {
+          parseComplete(r, file);
+        },
+      });
+    };
+    reader.readAsText(file);
+  };
+
+  const parseComplete = async (r, file) => {
         setCsvData(r.data);
         setHeaders(r.meta.fields || []);
         setListName(file.name.replace(/\.(csv|txt)$/i, ''));
@@ -150,22 +183,22 @@ function CSVUpload({ onDone }) {
             if (l.includes('email') || l.includes('mail')) auto.email = h;
             else if (l === 'firstname' || l === 'first' || l === 'fname') auto.firstName = h;
             else if (l === 'lastname' || l === 'last' || l === 'lname') auto.lastName = h;
+            else if (l === 'customer' || l === 'customername' || l === 'contactname' || l === 'jobname') { auto.firstName = h; auto.lastName = h; }
             else if (l.includes('phone') || l.includes('mobile') || l.includes('cell')) auto.phone = h;
             else if (l.includes('street') || l.includes('address') || l.includes('addr')) auto.street = h;
             else if (l === 'city' || l === 'town') auto.city = h;
-            else if (l === 'state' || l === 'st') auto.state = h;
-            else if (l === 'zip' || l === 'zipcode' || l === 'postal') auto.zip = h;
-            else if (l.includes('job') && l.includes('type')) auto.jobType = h;
-            else if (l.includes('date')) auto.jobDate = h;
-            else if (l.includes('value') || l.includes('amount') || l.includes('price')) auto.jobValue = h;
+            else if (l.includes('state') || l.includes('province')) auto.state = h;
+            else if (l === 'zip' || l.includes('zipcode') || l.includes('postal')) auto.zip = h;
+            else if (l.includes('jobtype') || l.includes('projecttype')) auto.jobType = h;
+            else if (l.includes('datecompleted') || l.includes('completeddate') || l.includes('jobdate')) auto.jobDate = h;
+            else if (l.includes('dollarscompleted') || l.includes('value') || l.includes('amount') || l.includes('price') || l.includes('revenue')) auto.jobValue = h;
+            else if (l.includes('salesassociate') || l.includes('salesrep') || l.includes('salesperson')) auto.salesRep = h;
           });
           setMapping(auto);
           setAiNotes('AI mapping unavailable — used basic auto-detection.');
           setAiConfidence('low');
         }
         setStep(3);
-      },
-    });
   };
 
   const parseFullName = (fullName) => {
