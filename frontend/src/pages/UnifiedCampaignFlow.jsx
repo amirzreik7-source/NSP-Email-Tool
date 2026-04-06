@@ -199,17 +199,34 @@ export default function UnifiedCampaignFlow() {
   };
   const removeExclusion = (idx) => setExclusions(exclusions.filter((_, i) => i !== idx));
 
+  const [listLoading, setListLoading] = useState(false);
+
   const selectList = async (listId) => {
     setSelectedListId(listId);
+    setListLoading(true);
     const list = lists.find(l => l.id === listId);
     setSelectedList(list);
     setFromEmail(list?.defaultSettings?.fromAddress || (list?.tier === 'personal' ? 'amirz@northernstarpainters.com' : 'mary@northernstarpainters.com'));
     setFromName(list?.defaultSettings?.fromName || (list?.tier === 'personal' ? 'Amir Zreik' : 'Mary Johnson'));
     setDesignStyle(list?.tier === 'personal' ? 'personal' : 'soft-branded');
     const uid = auth.currentUser.uid;
-    const allContacts = await getContactsByList(uid, listId);
-    const unsubs = await getUnsubscribes(uid);
-    setContacts(allContacts.filter(c => !c.unsubscribed && !c.bounced && !unsubs.has(c.email)));
+    try {
+      const allContacts = await getAllContacts(uid);
+      // Filter to contacts in this list
+      let listContacts = allContacts.filter(c => c.lists?.some(l => l.listId === listId));
+      // If no contacts match by listId, try matching by listName as fallback
+      if (listContacts.length === 0 && list?.name) {
+        listContacts = allContacts.filter(c => c.lists?.some(l => l.listName === list.name));
+      }
+      let unsubs = new Set();
+      try { unsubs = await getUnsubscribes(uid); } catch (e) { console.error('Unsubscribes fetch failed:', e); }
+      const filtered = listContacts.filter(c => !c.unsubscribed && !c.bounced && !unsubs.has(c.email));
+      setContacts(filtered);
+    } catch (e) {
+      console.error('Error loading contacts for list:', e);
+      setContacts([]);
+    }
+    setListLoading(false);
   };
 
   const cities = [...new Set(contacts.map(c => c.address?.city).filter(Boolean))].sort();
@@ -572,8 +589,15 @@ export default function UnifiedCampaignFlow() {
         </div>
       )}
 
+      {/* Loading indicator for large lists */}
+      {listLoading && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-center">
+          <p className="text-sm text-blue-700">Loading contacts...</p>
+        </div>
+      )}
+
       {/* Sender + Filters (shown for list and priority methods) */}
-      {(audienceMethod === 'list' && selectedListId || audienceMethod === 'priority' || (audienceMethod === 'nearby' && nearbyResults?.nearby?.length)) && (
+      {(audienceMethod === 'list' && selectedListId && !listLoading || audienceMethod === 'priority' || (audienceMethod === 'nearby' && nearbyResults?.nearby?.length)) && (
         <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Send From</label>
@@ -628,7 +652,9 @@ export default function UnifiedCampaignFlow() {
           )}
 
           <div className="flex flex-wrap gap-2">
-            {lists.filter(l => l.id !== selectedListId).map(l => (
+            {lists.filter(l => l.id !== selectedListId && !exclusions.some(e => e.type === 'list' && e.value === l.id))
+              .filter((l, i, arr) => arr.findIndex(x => x.name === l.name) === i)
+              .map(l => (
               <button key={l.id} onClick={() => addExclusion('list', l.id, `Not in: ${l.name}`)}
                 className="text-xs px-2.5 py-1 rounded-full border border-gray-300 text-gray-600 hover:border-red-300 hover:text-red-600 transition">
                 + Exclude {l.name}
