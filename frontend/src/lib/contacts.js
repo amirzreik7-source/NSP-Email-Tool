@@ -87,6 +87,84 @@ export async function upsertContact(userId, contactData, listInfo) {
   return { status: 'created', id: ref.id };
 }
 
+// Fast bulk import — loads all contacts once, checks duplicates in memory
+export async function bulkUpsertContacts(userId, rows, listInfo) {
+  // Load all existing contacts once upfront
+  const allExisting = await getAllContacts(userId);
+  const emailMap = new Map();
+  for (const c of allExisting) {
+    if (c.email) emailMap.set(c.email.toLowerCase().trim(), c);
+  }
+
+  let created = 0, updated = 0, skipped = 0, failed = 0;
+  const errors = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const contactData = rows[i];
+    const email = contactData.email?.toLowerCase().trim();
+    if (!email) { skipped++; errors.push({ row: i + 1, reason: 'no email' }); continue; }
+
+    try {
+      const existing = emailMap.get(email);
+      if (existing) {
+        const updates = {};
+        if (!existing.firstName && contactData.firstName) updates.firstName = contactData.firstName;
+        if (!existing.lastName && contactData.lastName) updates.lastName = contactData.lastName;
+        if (!existing.phone && contactData.phone) updates.phone = contactData.phone;
+        if (!existing.address?.street && contactData.address?.street) updates.address = contactData.address;
+        const lists = existing.lists || [];
+        if (listInfo && !lists.some(l => l.listId === listInfo.listId)) updates.lists = [...lists, listInfo];
+        if (contactData.tags?.length) {
+          const existingTags = new Set(existing.tags || []);
+          contactData.tags.forEach(t => existingTags.add(t));
+          updates.tags = [...existingTags];
+        }
+        if (contactData.jobHistory?.length) updates.jobHistory = [...(existing.jobHistory || []), ...contactData.jobHistory];
+        updates.updatedAt = new Date().toISOString();
+        if (Object.keys(updates).length > 0) {
+          await updateDoc(doc(db, CONTACTS_COL, existing.id), updates);
+        }
+        updated++;
+      } else {
+        const newContact = {
+          userId, email,
+          firstName: contactData.firstName || '', lastName: contactData.lastName || '',
+          phone: contactData.phone || '', address: contactData.address || {},
+          lists: listInfo ? [listInfo] : [], tags: contactData.tags || [],
+          jobHistory: contactData.jobHistory || [],
+          intelligenceProfile: { personalNotes: '', colorPreferences: '', personalDetails: '', renovationPlans: '' },
+          engagement: { campaignsReceived: 0, totalOpens: 0, totalClicks: 0, engagementScore: 0, engagementTrend: 'new' },
+          unsubscribed: false, bounced: false, source: 'csv_import',
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        };
+        const ref = await addDoc(collection(db, CONTACTS_COL), newContact);
+        // Add to map so subsequent rows with same email are detected as duplicates
+        emailMap.set(email, { id: ref.id, ...newContact });
+        created++;
+      }
+    } catch (e) {
+      failed++;
+      errors.push({ row: i + 1, reason: e.message });
+    }
+  }
+
+  return { created, updated, skipped, failed, errors };
+}
+
+// Delete a list and remove its reference from all contacts
+export async function deleteList(userId, listId) {
+  // Remove list document
+  await deleteDoc(doc(db, LISTS_COL, listId));
+  // Remove listId from all contacts that reference it
+  const allContacts = await getAllContacts(userId);
+  const contactsWithList = allContacts.filter(c => c.lists?.some(l => l.listId === listId));
+  for (const c of contactsWithList) {
+    const updatedLists = (c.lists || []).filter(l => l.listId !== listId);
+    await updateDoc(doc(db, CONTACTS_COL, c.id), { lists: updatedLists, updatedAt: new Date().toISOString() });
+  }
+  return { removed: contactsWithList.length };
+}
+
 // ── List CRUD ──
 
 export async function getAllLists(userId) {

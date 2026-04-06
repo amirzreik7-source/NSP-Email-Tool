@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { auth } from '../lib/firebase';
-import { getAllLists, createList, upsertContact, reclassifyContacts } from '../lib/contacts';
+import { getAllLists, createList, upsertContact, bulkUpsertContacts, reclassifyContacts, deleteList } from '../lib/contacts';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 
@@ -44,12 +44,27 @@ export default function Lists() {
           {lists.map(list => {
             const tier = TIER_COLORS[list.tier] || TIER_COLORS.general;
             return (
-              <div key={list.id} onClick={() => navigate(`/contacts/${list.id}`)} className={`${tier.bg} ${tier.border} border rounded-xl p-5 cursor-pointer hover:shadow-md transition`}>
+              <div key={list.id} className={`${tier.bg} ${tier.border} border rounded-xl p-5 hover:shadow-md transition group`}>
                 <div className="flex justify-between items-start">
-                  <div><h3 className="font-semibold text-gray-800">{list.name}</h3><p className="text-sm text-gray-500 mt-1">{list.contactCount || 0} contacts</p></div>
-                  <span className={`text-xs font-medium px-2 py-1 rounded-full ${tier.badge}`}>{tier.label}</span>
+                  <div onClick={() => navigate(`/contacts/${list.id}`)} className="cursor-pointer flex-1">
+                    <h3 className="font-semibold text-gray-800">{list.name}</h3>
+                    <p className="text-sm text-gray-500 mt-1">{list.contactCount || 0} contacts</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${tier.badge}`}>{tier.label}</span>
+                    <button onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm('Delete this list? This will not delete the contacts themselves — only the list. Contacts will remain in the database.')) return;
+                      try {
+                        await deleteList(auth.currentUser.uid, list.id);
+                        loadLists();
+                      } catch (err) { alert('Delete failed: ' + err.message); }
+                    }} className="text-gray-300 hover:text-red-500 text-xs opacity-0 group-hover:opacity-100 transition" title="Delete list">
+                      x
+                    </button>
+                  </div>
                 </div>
-                {list.userContext && <p className="text-sm text-gray-500 mt-2 line-clamp-2">{list.userContext}</p>}
+                {list.userContext && <p onClick={() => navigate(`/contacts/${list.id}`)} className="text-sm text-gray-500 mt-2 line-clamp-2 cursor-pointer">{list.userContext}</p>}
               </div>
             );
           })}
@@ -196,14 +211,15 @@ function CSVUpload({ onDone }) {
       },
     });
     const listInfo = { listId, listName, tier };
-    let created = 0, updated = 0, skipped = 0, failed = 0;
+
+    // Prepare all rows into contact data objects first
+    const preparedRows = [];
     const errors = [];
-    const possibleDupes = [];
+    let preSkipped = 0;
 
     for (let i = 0; i < csvData.length; i++) {
       const row = csvData[i];
 
-      // Handle full name splitting
       let firstName = row[mapping.firstName] || '';
       let lastName = row[mapping.lastName] || '';
       if (hasFullName && mapping.firstName) {
@@ -212,18 +228,15 @@ function CSVUpload({ onDone }) {
         lastName = parsed.last;
       }
 
-      // Handle full address parsing
       let address = { street: row[mapping.street] || '', city: row[mapping.city] || '', state: row[mapping.state] || '', zip: row[mapping.zip] || '' };
       if (hasFullAddress && mapping.street && !mapping.city) {
         const parsed = parseFullAddress(row[mapping.street]);
         address = parsed;
       }
 
-      // Clean phone — strip non-digits
       let phone = row[mapping.phone] || '';
       phone = phone.replace(/[^0-9+]/g, '');
 
-      // Clean job value — strip $ and commas
       let jobValue = 0;
       if (mapping.jobValue && row[mapping.jobValue]) {
         jobValue = parseFloat(String(row[mapping.jobValue]).replace(/[$,]/g, '')) || 0;
@@ -245,31 +258,35 @@ function CSVUpload({ onDone }) {
         }] : [],
       };
 
-      // Skip rows with no email AND no name — truly empty
       if (!contactData.email && !contactData.firstName && !contactData.lastName) {
-        skipped++;
+        preSkipped++;
         errors.push({ row: i + 1, reason: 'Empty row — no email, no name' });
-        if ((i + 1) % 10 === 0 || i === csvData.length - 1) setProgress({ total: csvData.length, processed: i + 1, created, updated, skipped, failed });
         continue;
       }
 
-      // If no email but has name, still import (for fuzzy matching later)
       if (!contactData.email) {
         contactData.email = `no-email-${Date.now()}-${i}@placeholder.local`;
         errors.push({ row: i + 1, reason: `No email — saved as placeholder (${contactData.firstName} ${contactData.lastName})` });
       }
 
-      try {
-        const r = await upsertContact(userId, contactData, listInfo);
-        if (r.status === 'created') created++;
-        else if (r.status === 'updated') updated++;
-        else { skipped++; errors.push({ row: i + 1, reason: r.reason || 'Skipped' }); }
-      } catch (e) {
-        failed++;
-        errors.push({ row: i + 1, reason: `Save failed: ${e.message}` });
-      }
-      if ((i + 1) % 10 === 0 || i === csvData.length - 1) setProgress({ total: csvData.length, processed: i + 1, created, updated, skipped, failed });
+      preparedRows.push(contactData);
     }
+
+    setProgress({ total: csvData.length, processed: 0, created: 0, updated: 0, skipped: preSkipped, failed: 0 });
+
+    // Bulk import — loads existing contacts once, then writes sequentially
+    const result = await bulkUpsertContacts(userId, preparedRows, listInfo);
+
+    // Update progress with final counts
+    setProgress({
+      total: csvData.length,
+      processed: csvData.length,
+      created: result.created,
+      updated: result.updated,
+      skipped: preSkipped + result.skipped,
+      failed: result.failed,
+    });
+    errors.push(...result.errors);
 
     // Run fuzzy duplicate detection
     try {
