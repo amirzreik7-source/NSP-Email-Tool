@@ -2630,6 +2630,47 @@ app.post('/api/ai/rewrite-notes', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── AI: Extract structured intel from brain dump ──
+app.post('/api/ai/extract-contact-intel', async (req, res) => {
+  try {
+    const ai = await getClaude();
+    if (!ai) return res.status(500).json({ error: 'Claude API key not configured' });
+    const { text, contactName, existingIntel } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: 'No text provided' });
+
+    const existingContext = (existingIntel || []).length > 0
+      ? `\nAlready known about this contact:\n${existingIntel.map(i => `- ${i.label}: ${i.value}`).join('\n')}\nDo NOT repeat these. Only extract NEW information.`
+      : '';
+
+    const message = await ai.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: `You extract structured customer intelligence from a painting contractor's notes. Categorize each piece of information into exactly one type. Return ONLY valid JSON.
+
+Types:
+- "personal_detail" — pets, family members, hobbies, personal facts
+- "preference" — color preferences, style preferences, material preferences
+- "project_interest" — mentioned future projects, renovations, areas they want painted
+- "decision_maker" — who makes decisions, who to talk to, household dynamics
+- "property_detail" — house details, square footage, surfaces, siding type, previous work
+- "relationship_note" — how they know Amir, referral source, how they met
+- "timing" — when they want work done, seasonal preferences, availability constraints`,
+      messages: [{ role: 'user', content: `Customer: ${contactName || 'Unknown'}${existingContext}
+
+Brain dump from the contractor:
+"${text}"
+
+Extract every distinct piece of information. For each one return a short label (2-4 words) and the value (what was said). Return JSON:
+{"extracted":[{"type":"...","label":"...","value":"..."}]}
+ONLY JSON.` }],
+    });
+
+    const raw = message.content[0].text;
+    const json = JSON.parse(raw.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    res.json(json);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Brand Profile endpoints ──
 let _brandProfileCache = null;
 let _brandProfileCacheTime = 0;

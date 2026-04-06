@@ -23,6 +23,10 @@ export default function ContactProfile() {
   const [editForm, setEditForm] = useState({});
   const [showWonModal, setShowWonModal] = useState(false);
   const [wonForm, setWonForm] = useState({ jobValue: '', jobType: 'Exterior', source: '', notes: '' });
+  const [brainDump, setBrainDump] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [extractedIntel, setExtractedIntel] = useState(null); // array of { type, label, value, checked }
+  const [intelSaving, setIntelSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -115,6 +119,66 @@ export default function ContactProfile() {
     } catch (e) { alert('Error: ' + e.message); }
   };
 
+  const extractIntel = async () => {
+    if (!brainDump.trim()) return;
+    setExtracting(true);
+    setExtractedIntel(null);
+    try {
+      const res = await fetch(`${API}/api/ai/extract-contact-intel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: brainDump,
+          contactName: `${contact.firstName} ${contact.lastName}`,
+          existingIntel: contact.intelligenceProfile?.intel || [],
+        }),
+      });
+      const data = await res.json();
+      if (data.extracted?.length) {
+        setExtractedIntel(data.extracted.map(item => ({ ...item, checked: true })));
+      } else {
+        setExtractedIntel([]);
+      }
+    } catch (e) { alert('Extraction failed: ' + e.message); }
+    setExtracting(false);
+  };
+
+  const saveIntel = async () => {
+    const selected = (extractedIntel || []).filter(i => i.checked);
+    if (!selected.length) return;
+    setIntelSaving(true);
+    try {
+      const existing = contact.intelligenceProfile?.intel || [];
+      const newItems = selected.map(({ type, label, value }) => ({
+        type, label, value, addedAt: new Date().toISOString(),
+      }));
+      const merged = [...existing, ...newItems];
+      await updateDoc(doc(db, 'emailContacts', contactId), {
+        'intelligenceProfile.intel': merged,
+      });
+      setContact(prev => ({
+        ...prev,
+        intelligenceProfile: { ...prev.intelligenceProfile, intel: merged },
+      }));
+      setExtractedIntel(null);
+      setBrainDump('');
+    } catch (e) { alert('Save failed: ' + e.message); }
+    setIntelSaving(false);
+  };
+
+  const removeIntelItem = async (index) => {
+    const intel = [...(contact.intelligenceProfile?.intel || [])];
+    intel.splice(index, 1);
+    try {
+      await updateDoc(doc(db, 'emailContacts', contactId), {
+        'intelligenceProfile.intel': intel,
+      });
+      setContact(prev => ({
+        ...prev,
+        intelligenceProfile: { ...prev.intelligenceProfile, intel },
+      }));
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
   if (loading) return <p className="text-gray-400 text-center py-10">Loading contact...</p>;
   if (!contact) return <p className="text-red-500 text-center py-10">Contact not found.</p>;
 
@@ -126,6 +190,19 @@ export default function ContactProfile() {
     stormScore >= 40 ? 'text-yellow-600 bg-yellow-50 border-yellow-200' :
     'text-gray-600 bg-gray-50 border-gray-200';
   const scoreLabel = stormScore >= 80 ? 'Hot' : stormScore >= 60 ? 'Warm' : stormScore >= 40 ? 'Active' : 'Cold';
+
+  const intelStyle = {
+    personal_detail: { bg: 'bg-pink-50', border: 'border-pink-200', text: 'text-pink-700', icon: '👤' },
+    preference: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', icon: '🎨' },
+    project_interest: { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-700', icon: '🔨' },
+    decision_maker: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', icon: '👔' },
+    property_detail: { bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-700', icon: '🏠' },
+    relationship_note: { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', icon: '🤝' },
+    timing: { bg: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-700', icon: '📅' },
+  };
+  const getIntelStyle = (type) => intelStyle[type] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', icon: '📋' };
+
+  const savedIntel = c.intelligenceProfile?.intel || [];
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -259,6 +336,31 @@ export default function ContactProfile() {
             )}
           </div>
 
+          {/* Saved Intel Cards */}
+          {savedIntel.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-bold text-gray-800 mb-3">Customer Intel</h3>
+              <div className="grid grid-cols-2 gap-2">
+                {savedIntel.map((item, i) => {
+                  const s = getIntelStyle(item.type);
+                  return (
+                    <div key={i} className={`${s.bg} ${s.border} border rounded-lg p-3 group relative`}>
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm">{s.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs font-semibold ${s.text}`}>{item.label}</p>
+                          <p className="text-sm text-gray-700 mt-0.5">{item.value}</p>
+                        </div>
+                        <button onClick={() => removeIntelItem(i)}
+                          className="text-gray-300 hover:text-red-500 text-xs opacity-0 group-hover:opacity-100 absolute top-2 right-2">x</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Notes */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <h3 className="text-sm font-bold text-gray-800 mb-2">Notes</h3>
@@ -298,6 +400,60 @@ export default function ContactProfile() {
                   <button onClick={acceptRewrite} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-medium">Save Improved Version</button>
                   <button onClick={() => setAiRewriteResult(null)} className="px-4 py-2 border border-gray-300 rounded-lg text-xs">Keep Original</button>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Intel — Brain Dump */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-bold text-gray-800 mb-1">Quick Intel</h3>
+            <p className="text-xs text-gray-400 mb-3">Brain dump what you remember — AI will organize it into structured data.</p>
+            <textarea value={brainDump} onChange={e => setBrainDump(e.target.value)}
+              rows={3} placeholder="e.g., she has a dog named Max, mentioned redoing the kitchen, prefers blue tones, husband makes the final decision..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            <button onClick={extractIntel} disabled={extracting || !brainDump.trim()}
+              className="mt-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+              {extracting ? 'Extracting...' : 'Extract Intel'}
+            </button>
+
+            {/* Extracted results for review */}
+            {extractedIntel !== null && (
+              <div className="mt-4 border border-indigo-200 rounded-xl p-4 bg-indigo-50">
+                {extractedIntel.length === 0 ? (
+                  <p className="text-sm text-gray-500">No new intel extracted. Try adding more detail.</p>
+                ) : (
+                  <>
+                    <h4 className="text-sm font-bold text-indigo-800 mb-3">Extracted Intel — confirm what to save:</h4>
+                    <div className="space-y-2">
+                      {extractedIntel.map((item, i) => {
+                        const s = getIntelStyle(item.type);
+                        return (
+                          <label key={i} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${item.checked ? `${s.bg} ${s.border}` : 'bg-gray-50 border-gray-200 opacity-60'}`}>
+                            <input type="checkbox" checked={item.checked}
+                              onChange={() => setExtractedIntel(prev => prev.map((it, j) => j === i ? { ...it, checked: !it.checked } : it))}
+                              className="mt-1 rounded" />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm">{s.icon}</span>
+                                <span className={`text-xs font-semibold ${s.text}`}>{item.label}</span>
+                                <span className="text-xs text-gray-400">({item.type.replace('_', ' ')})</span>
+                              </div>
+                              <p className="text-sm text-gray-700 mt-0.5">{item.value}</p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={saveIntel} disabled={intelSaving || !extractedIntel.some(i => i.checked)}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium disabled:opacity-50">
+                        {intelSaving ? 'Saving...' : `Save ${extractedIntel.filter(i => i.checked).length} Selected`}
+                      </button>
+                      <button onClick={() => { setExtractedIntel(null); setBrainDump(''); }}
+                        className="px-4 py-2 border border-gray-300 rounded-lg text-xs">Cancel</button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
