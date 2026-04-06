@@ -220,12 +220,43 @@ function CSVUpload({ onDone }) {
     for (let i = 0; i < csvData.length; i++) {
       const row = csvData[i];
 
+      // Check if the row has any non-empty values at all
+      const rowValues = Object.values(row).filter(v => v && String(v).trim());
+      if (rowValues.length === 0) {
+        preSkipped++;
+        errors.push({ row: i + 1, reason: 'Completely empty row' });
+        continue;
+      }
+
       let firstName = row[mapping.firstName] || '';
       let lastName = row[mapping.lastName] || '';
       if (hasFullName && mapping.firstName) {
         const parsed = parseFullName(row[mapping.firstName]);
         firstName = parsed.first;
         lastName = parsed.last;
+      }
+
+      // If mapping didn't find name fields, try to extract from any column that looks like a name
+      if (!firstName && !lastName) {
+        const headers = Object.keys(row);
+        for (const h of headers) {
+          const val = (row[h] || '').trim();
+          const hl = h.toLowerCase().replace(/[^a-z]/g, '');
+          if (!val) continue;
+          if (hl.includes('name') || hl.includes('customer') || hl.includes('contact') || hl.includes('owner')) {
+            const parsed = parseFullName(val);
+            if (parsed.first) { firstName = parsed.first; lastName = parsed.last; break; }
+          }
+        }
+      }
+
+      // If mapping didn't find email, try to find it in any column
+      let email = (row[mapping.email] || '').trim();
+      if (!email) {
+        for (const val of Object.values(row)) {
+          const v = (val || '').trim();
+          if (v.includes('@') && v.includes('.')) { email = v; break; }
+        }
       }
 
       let address = { street: row[mapping.street] || '', city: row[mapping.city] || '', state: row[mapping.state] || '', zip: row[mapping.zip] || '' };
@@ -235,6 +266,13 @@ function CSVUpload({ onDone }) {
       }
 
       let phone = row[mapping.phone] || '';
+      // If no phone mapped, scan for phone-like values
+      if (!phone) {
+        for (const val of Object.values(row)) {
+          const v = (val || '').replace(/[^0-9]/g, '');
+          if (v.length >= 10 && v.length <= 11) { phone = v; break; }
+        }
+      }
       phone = phone.replace(/[^0-9+]/g, '');
 
       let jobValue = 0;
@@ -243,7 +281,7 @@ function CSVUpload({ onDone }) {
       }
 
       const contactData = {
-        email: (row[mapping.email] || '').trim(),
+        email,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone,
@@ -258,15 +296,15 @@ function CSVUpload({ onDone }) {
         }] : [],
       };
 
-      if (!contactData.email && !contactData.firstName && !contactData.lastName) {
+      // Only skip if truly nothing usable was found
+      if (!contactData.email && !contactData.firstName && !contactData.lastName && !contactData.phone) {
         preSkipped++;
-        errors.push({ row: i + 1, reason: 'Empty row — no email, no name' });
+        errors.push({ row: i + 1, reason: `No usable data found (raw: ${rowValues.slice(0, 3).join(', ')})` });
         continue;
       }
 
       if (!contactData.email) {
         contactData.email = `no-email-${Date.now()}-${i}@placeholder.local`;
-        errors.push({ row: i + 1, reason: `No email — saved as placeholder (${contactData.firstName} ${contactData.lastName})` });
       }
 
       preparedRows.push(contactData);
