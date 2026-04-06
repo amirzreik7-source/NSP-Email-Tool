@@ -66,6 +66,7 @@ app.get('/api/health', (req, res) => {
     hasClaudeKey: !!getKey('CLAUDE_API_KEY'),
     claudeKeyPrefix: getKey('CLAUDE_API_KEY') ? getKey('CLAUDE_API_KEY').substring(0, 10) + '...' : 'MISSING',
     hasBrevoKey: !!getKey('BREVO_API_KEY'),
+    hasGoogleGeoKey: !!getKey('GOOGLE_GEOCODING_API_KEY'),
     envSource: getKey('CLAUDE_API_KEY') ? (process.env.CLAUDE_API_KEY ? 'env' : 'file') : 'none',
   });
 });
@@ -1235,13 +1236,7 @@ app.post('/api/streetview', async (req, res) => {
 app.post('/api/geocode', async (req, res) => {
   const { address } = req.body;
   try {
-    // Use free Open-Meteo geocoding first
-    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(address)}&count=1&language=en&format=json`);
-    const data = await r.json();
-    if (data.results?.length) {
-      return res.json({ lat: data.results[0].latitude, lng: data.results[0].longitude, source: 'open-meteo' });
-    }
-    // Fallback to Google if configured
+    // Try Google first if configured (much better for street addresses)
     const gKey = getKey('GOOGLE_GEOCODING_API_KEY');
     if (gKey) {
       const gr = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${gKey}`);
@@ -1250,6 +1245,12 @@ app.post('/api/geocode', async (req, res) => {
         const loc = gd.results[0].geometry.location;
         return res.json({ lat: loc.lat, lng: loc.lng, source: 'google' });
       }
+    }
+    // Fallback to free Open-Meteo (city-level only)
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(address)}&count=1&language=en&format=json`);
+    const data = await r.json();
+    if (data.results?.length) {
+      return res.json({ lat: data.results[0].latitude, lng: data.results[0].longitude, source: 'open-meteo' });
     }
     res.json({ error: 'Could not geocode address' });
   } catch(e) { res.status(500).json({ error: e.message }); }
