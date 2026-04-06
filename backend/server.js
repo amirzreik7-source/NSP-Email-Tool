@@ -32,6 +32,7 @@ console.log('ENV CHECK:', {
   PORT: process.env.PORT || 'NOT SET',
   CLAUDE: process.env.CLAUDE_API_KEY ? 'SET (' + process.env.CLAUDE_API_KEY.substring(0,10) + '...)' : 'NOT SET',
   BREVO: process.env.BREVO_API_KEY ? 'SET' : 'NOT SET',
+  GOOGLE_GEO: process.env.GOOGLE_GEOCODING_API_KEY ? 'SET' : 'NOT SET',
 });
 
 function getKey(name) {
