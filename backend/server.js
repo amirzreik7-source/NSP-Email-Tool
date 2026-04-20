@@ -1732,29 +1732,36 @@ async function getStrategyContext(userId) {
         'Chantilly': { lat: 38.8943, lng: -77.4311 }, 'Leesburg': { lat: 39.1157, lng: -77.5636 },
         'Sterling': { lat: 39.0062, lng: -77.4286 }, 'Manassas': { lat: 38.7509, lng: -77.4753 },
       };
-      for (const city of topCities) {
+      const fetchCityWeather = async (city) => {
         const c = coords[city];
-        if (!c) continue;
+        if (!c) return null;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3000);
         try {
           const url = `https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&temperature_unit=fahrenheit&timezone=America/New_York&forecast_days=7`;
-          const r = await fetch(url);
+          const r = await fetch(url, { signal: ctrl.signal });
           const data = await r.json();
-          if (data.daily) {
-            let consecutive = 0, maxCon = 0;
-            for (let i = 0; i < data.daily.time.length; i++) {
-              const ok = data.daily.temperature_2m_max[i] >= 50 && data.daily.temperature_2m_max[i] <= 90 && data.daily.precipitation_sum[i] === 0 && data.daily.wind_speed_10m_max[i] < 20;
-              if (ok) { consecutive++; maxCon = Math.max(maxCon, consecutive); } else consecutive = 0;
-            }
-            weatherData.push({
-              city,
-              perfectDays: maxCon,
-              isPaintingWeather: maxCon >= 3,
-              tempRange: `${Math.round(Math.min(...data.daily.temperature_2m_min))}-${Math.round(Math.max(...data.daily.temperature_2m_max))}°F`,
-              startDate: maxCon >= 3 ? data.daily.time[data.daily.precipitation_sum.findIndex((p, i) => p === 0 && data.daily.temperature_2m_max[i] >= 50)] : null,
-            });
+          if (!data.daily) return null;
+          let consecutive = 0, maxCon = 0;
+          for (let i = 0; i < data.daily.time.length; i++) {
+            const ok = data.daily.temperature_2m_max[i] >= 50 && data.daily.temperature_2m_max[i] <= 90 && data.daily.precipitation_sum[i] === 0 && data.daily.wind_speed_10m_max[i] < 20;
+            if (ok) { consecutive++; maxCon = Math.max(maxCon, consecutive); } else consecutive = 0;
           }
-        } catch (e) { /* skip city */ }
-      }
+          return {
+            city,
+            perfectDays: maxCon,
+            isPaintingWeather: maxCon >= 3,
+            tempRange: `${Math.round(Math.min(...data.daily.temperature_2m_min))}-${Math.round(Math.max(...data.daily.temperature_2m_max))}°F`,
+            startDate: maxCon >= 3 ? data.daily.time[data.daily.precipitation_sum.findIndex((p, i) => p === 0 && data.daily.temperature_2m_max[i] >= 50)] : null,
+          };
+        } catch (e) {
+          return null;
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      const results = await Promise.all(topCities.map(fetchCityWeather));
+      weatherData = results.filter(Boolean);
     } catch (e) { /* weather fetch failed */ }
 
     // Top storm score leads

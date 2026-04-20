@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, addDoc, getDocs, query, where, updateDoc, doc, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, updateDoc, doc, deleteDoc, getDoc, writeBatch } from 'firebase/firestore';
 
 const CONTACTS_COL = 'emailContacts';
 const LISTS_COL = 'emailLists';
@@ -158,15 +158,23 @@ export async function bulkUpsertContacts(userId, rows, listInfo, onProgress) {
 
 // Delete a list and remove its reference from all contacts
 export async function deleteList(userId, listId) {
-  // Remove list document
-  await deleteDoc(doc(db, LISTS_COL, listId));
-  // Remove listId from all contacts that reference it
   const allContacts = await getAllContacts(userId);
   const contactsWithList = allContacts.filter(c => c.lists?.some(l => l.listId === listId));
-  for (const c of contactsWithList) {
-    const updatedLists = (c.lists || []).filter(l => l.listId !== listId);
-    await updateDoc(doc(db, CONTACTS_COL, c.id), { lists: updatedLists, updatedAt: new Date().toISOString() });
+  const now = new Date().toISOString();
+
+  // Batch contact updates — Firestore allows up to 500 writes per batch
+  for (let i = 0; i < contactsWithList.length; i += 450) {
+    const chunk = contactsWithList.slice(i, i + 450);
+    const batch = writeBatch(db);
+    for (const c of chunk) {
+      const updatedLists = (c.lists || []).filter(l => l.listId !== listId);
+      batch.update(doc(db, CONTACTS_COL, c.id), { lists: updatedLists, updatedAt: now });
+    }
+    await batch.commit();
   }
+
+  // Delete the list doc last, so a mid-run failure leaves the list recoverable
+  await deleteDoc(doc(db, LISTS_COL, listId));
   return { removed: contactsWithList.length };
 }
 

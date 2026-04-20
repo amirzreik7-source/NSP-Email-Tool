@@ -20,19 +20,32 @@ export default function Home() {
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
-    const uid = auth.currentUser.uid;
-    const [allLists, allCampaigns, objRes, ctxRes] = await Promise.all([
-      getAllLists(uid),
-      getAllCampaigns(uid),
-      fetch(`${API}/api/objectives?userId=${uid}`).then(r => r.json()).catch(() => []),
-      fetch(`${API}/api/strategy/context?userId=${uid}`).then(r => r.json()).catch(() => ({})),
-    ]);
-    setLists(allLists);
-    setCampaigns(allCampaigns);
-    setObjectives(objRes);
-    setTotalContacts(ctxRes.totalContacts || 0);
-    setWeather((ctxRes.weather || []).filter(w => w.isPaintingWeather));
-    setLoading(false);
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) { setLoading(false); return; }
+
+      const fetchWithTimeout = (url, ms = 5000) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), ms);
+        return fetch(url, { signal: ctrl.signal })
+          .then(r => r.json())
+          .finally(() => clearTimeout(timer));
+      };
+
+      const [allLists, allCampaigns, objRes, ctxRes] = await Promise.all([
+        getAllLists(uid).catch(() => []),
+        getAllCampaigns(uid).catch(() => []),
+        fetchWithTimeout(`${API}/api/objectives?userId=${uid}`).catch(() => []),
+        fetchWithTimeout(`${API}/api/strategy/context?userId=${uid}`, 6000).catch(() => ({})),
+      ]);
+      setLists(allLists || []);
+      setCampaigns(allCampaigns || []);
+      setObjectives(Array.isArray(objRes) ? objRes : []);
+      setTotalContacts(ctxRes?.totalContacts || 0);
+      setWeather((ctxRes?.weather || []).filter(w => w.isPaintingWeather));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getListStats = (list) => {
