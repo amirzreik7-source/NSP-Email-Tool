@@ -1438,11 +1438,16 @@ async function getAdminDb() {
     const { getFirestore } = await import('firebase-admin/firestore');
     if (getApps().length === 0) {
       const serviceAccountPath = path.resolve(__dirname, 'service-account.json');
+      const envCreds = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
       if (existsSync(serviceAccountPath)) {
         const sa = JSON.parse(readFileSync(serviceAccountPath, 'utf-8'));
         initializeApp({ credential: cert(sa) });
+      } else if (envCreds && envCreds.trim().startsWith('{')) {
+        // Raw JSON pasted into env var (Railway-style)
+        const sa = JSON.parse(envCreds);
+        initializeApp({ credential: cert(sa) });
       } else {
-        // Fallback: use project ID directly (works on Railway with GOOGLE_APPLICATION_CREDENTIALS)
+        // Fallback: project ID only (works if GOOGLE_APPLICATION_CREDENTIALS points to a real file)
         initializeApp({ projectId: 'northern-star-painters' });
       }
     }
