@@ -24,6 +24,12 @@ export default function Home() {
       const uid = auth.currentUser?.uid;
       if (!uid) { setLoading(false); return; }
 
+      const withTimeout = (promise, ms, fallback) =>
+        Promise.race([
+          promise.catch(() => fallback),
+          new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+        ]);
+
       const fetchWithTimeout = (url, ms = 5000) => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), ms);
@@ -33,10 +39,10 @@ export default function Home() {
       };
 
       const [allLists, allCampaigns, objRes, ctxRes] = await Promise.all([
-        getAllLists(uid).catch(() => []),
-        getAllCampaigns(uid).catch(() => []),
-        fetchWithTimeout(`${API}/api/objectives?userId=${uid}`).catch(() => []),
-        fetchWithTimeout(`${API}/api/strategy/context?userId=${uid}`, 6000).catch(() => ({})),
+        withTimeout(getAllLists(uid), 6000, []),
+        withTimeout(getAllCampaigns(uid), 6000, []),
+        withTimeout(fetchWithTimeout(`${API}/api/objectives?userId=${uid}`), 6000, []),
+        withTimeout(fetchWithTimeout(`${API}/api/strategy/context?userId=${uid}`, 6000), 7000, {}),
       ]);
       setLists(allLists || []);
       setCampaigns(allCampaigns || []);
